@@ -262,19 +262,19 @@ export default function AnalyticsDashboard() {
           { hour: "14:00", count: 35 },
           { hour: "17:00", count: 28 },
         ],
-        avg_response_by_hour: {
-          morning: "15 minutes",
-          afternoon: "28 minutes",
-          evening: "45 minutes",
+        response_times: {
+          average: "28 minutes",
+          fastest: "15 minutes",
+          slowest: "45 minutes",
         },
         days: {
-          Monday: 24,
-          Tuesday: 20,
-          Wednesday: 22,
-          Thursday: 26,
-          Friday: 18,
-          Saturday: 5,
-          Sunday: 3,
+          Monday: 45,
+          Tuesday: 52,
+          Wednesday: 38,
+          Thursday: 65,
+          Friday: 48,
+          Saturday: 22,
+          Sunday: 15,
         },
       });
     } catch (error) {
