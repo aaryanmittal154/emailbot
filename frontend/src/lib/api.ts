@@ -2,7 +2,7 @@ import axios from "axios";
 
 // API endpoint base URL
 const BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://emailbot-k8s7.onrender.com";
+  process.env.NEXT_PUBLIC_API_URL || "https://emailbot-k8s7.onrender.com";
 
 // Set up axios instance
 const api = axios.create({

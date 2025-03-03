@@ -60,7 +60,7 @@ import {
   getSimilarThreads,
 } from "../../lib/api";
 
-const BASE_URL = "http://emailbot-k8s7.onrender.com";
+const BASE_URL = "https://emailbot-k8s7.onrender.com";
 
 interface UserData {
   id: number;

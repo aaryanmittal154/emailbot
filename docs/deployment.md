@@ -124,7 +124,7 @@ server {
     server_name your-domain.com;
 
     location / {
-        proxy_pass http://localhost:3000;  # Next.js frontend
+        proxy_pass https://localhost:3000;  # Next.js frontend
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -132,7 +132,7 @@ server {
     }
 
     location /api {
-        proxy_pass http://emailbot-k8s7.onrender.com;  # FastAPI backend
+        proxy_pass https://emailbot-k8s7.onrender.com;  # FastAPI backend
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
