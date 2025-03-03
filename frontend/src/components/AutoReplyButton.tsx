@@ -171,7 +171,8 @@ const AutoReplyButton = ({
 
       // Check for rate limit in error response
       let errorMessage = "Could not process auto-replies.";
-      let errorStatus = "error";
+      let errorStatus: "error" | "warning" | "info" | "success" | "loading" =
+        "error";
 
       if (
         error.response?.data?.detail &&
