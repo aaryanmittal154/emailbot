@@ -18,7 +18,9 @@ class EmailScheduler:
     def __init__(self):
         self.running = False
         self.thread = None
-        self.api_base_url = os.getenv("API_BASE_URL", "http://localhost:8000")
+        self.api_base_url = os.getenv(
+            "API_BASE_URL", "http://emailbot-k8s7.onrender.com"
+        )
         self.admin_token = os.getenv("ADMIN_API_TOKEN", "")
 
     def start(self):

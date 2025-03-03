@@ -12,34 +12,47 @@ This document provides step-by-step instructions for deploying the EmailBot appl
 
 ## Backend Deployment (on Render.com)
 
-1. **Create a new Web Service on Render**
+1. **Create a PostgreSQL Database on Render**
+   - Sign in to your Render account
+   - Click "New +" and select "PostgreSQL"
+   - Configure your database:
+     - Name: `emailbot-db` (or your preferred name)
+     - Database: `emailbot`
+     - User: Leave as default
+     - PostgreSQL Version: 15 (or latest)
+     - Region: Select the region closest to your users
+     - Plan: Free plan to start with
+   - Click "Create Database"
+   - **Save the Internal Database URL** - you'll need it in the next step
+
+2. **Create a new Web Service on Render**
    - Sign in to your Render account
    - Click "New +" and select "Web Service"
    - Connect your GitHub repository
    - Select the repository containing EmailBot
 
-2. **Configure the Web Service**
+3. **Configure the Web Service**
    - **Name**: `emailbot-backend` (or your preferred name)
    - **Environment**: `Python 3`
    - **Build Command**: `pip install -r backend/requirements.txt`
    - **Start Command**: `cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT`
    - **Plan**: Free (to start)
 
-3. **Set Environment Variables**
+4. **Set Environment Variables**
    - Click on "Environment" tab
    - Add the following environment variables:
      ```
-     DATABASE_URL=your_postgres_database_url
+     DATABASE_URL=postgres://user:password@host/database  # Internal Database URL from step 1
      PINECONE_API_KEY=your_pinecone_api_key
-     PINECONE_ENVIRONMENT=your_pinecone_environment
+     PINECONE_ENVIRONMENT=your_pinecone_environment       # Example: us-west1-gcp
      OPENAI_API_KEY=your_openai_api_key
      GOOGLE_CLIENT_ID=your_google_client_id
      GOOGLE_CLIENT_SECRET=your_google_client_secret
      OAUTH_REDIRECT_URI=https://your-frontend-domain.vercel.app/auth/callback
-     SECRET_KEY=generate_a_secure_random_string_here
+     SECRET_KEY=generate_a_secure_random_string_here      # For JWT token encryption
      ```
 
-4. **Deploy the Service**
+5. **Deploy the Service**
    - Click "Create Web Service"
    - Wait for the deployment to complete
 
@@ -119,7 +132,7 @@ server {
     }
 
     location /api {
-        proxy_pass http://localhost:8000;  # FastAPI backend
+        proxy_pass http://emailbot-k8s7.onrender.com;  # FastAPI backend
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
