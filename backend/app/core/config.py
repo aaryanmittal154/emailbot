@@ -1,6 +1,8 @@
 import os
 from typing import List
-from pydantic import BaseSettings
+
+# Update import to use pydantic-settings
+from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -56,10 +58,12 @@ class Settings(BaseSettings):
         "profile",  # View basic profile info
     ]
 
-    class Config:
-        case_sensitive = True
-        env_file = None  # Don't use Pydantic's .env loading
-        extra = "ignore"  # Ignore extra fields in the .env file
+    # Update Config to model_config for Pydantic v2
+    model_config = {
+        "case_sensitive": True,
+        "env_file": None,  # Don't use Pydantic's .env loading
+        "extra": "ignore",  # Ignore extra fields in the .env file
+    }
 
 
 settings = Settings()
