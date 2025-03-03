@@ -55,7 +55,7 @@ import {
   getEmailTimePatterns,
   naturalLanguageSearch,
   getSearchSuggestions,
-} from "@/lib/api.wrapper";
+} from "../../lib/api";
 
 // Helper function to debounce input
 const useDebounce = (value, delay) => {

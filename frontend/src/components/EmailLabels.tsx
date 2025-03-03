@@ -67,7 +67,7 @@ import {
   createLabel,
   updateLabel,
   deleteLabel,
-} from "@/lib/api.wrapper";
+} from "../lib/api";
 
 // Component for displaying label suggestions
 export const LabelSuggestions = ({ threadId, onLabelApplied }) => {

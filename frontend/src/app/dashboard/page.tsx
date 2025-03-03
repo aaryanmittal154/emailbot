@@ -58,7 +58,7 @@ import {
   classifyThread,
   suggestLabelsForThread,
   getSimilarThreads,
-} from "@/lib/api.wrapper";
+} from "../../lib/api";
 
 const BASE_URL = "http://localhost:8000";
 
