@@ -58,7 +58,7 @@ import {
 } from "../../lib/api";
 
 // Helper function to debounce input
-const useDebounce = (value, delay) => {
+const useDebounce = (value: string, delay: number): string => {
   const [debouncedValue, setDebouncedValue] = useState(value);
 
   useEffect(() => {
@@ -81,6 +81,49 @@ interface UserData {
   picture: string;
 }
 
+// Add these type definitions before the component
+interface TimePattern {
+  days: Record<string, number>;
+  peak_times: Array<{
+    hour: string;
+    count: number;
+  }>;
+  response_times: {
+    average: string;
+    fastest: string;
+    slowest: string;
+  };
+}
+
+// Add these type definitions
+interface PopularTopic {
+  topic: string;
+  count: number;
+  threads: string[];
+}
+
+interface SentimentData {
+  overall: string;
+  breakdown: {
+    positive: number;
+    neutral: number;
+    negative: number;
+  };
+  trends: Array<{
+    date: string;
+    sentiment: string;
+    value: number;
+  }>;
+}
+
+interface SearchResult {
+  thread_id: string;
+  subject: string;
+  snippet: string;
+  date: string;
+  score: number;
+}
+
 export default function AnalyticsDashboard() {
   const router = useRouter();
   const toast = useToast();
@@ -88,19 +131,21 @@ export default function AnalyticsDashboard() {
   const [isLoading, setIsLoading] = useState(true);
 
   // Search functionality
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState<string>("");
   const debouncedSearchQuery = useDebounce(searchQuery, 500);
-  const [searchResults, setSearchResults] = useState([]);
-  const [searchSuggestions, setSearchSuggestions] = useState([]);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [searchSuggestions, setSearchSuggestions] = useState<string[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
   // Analytics data
-  const [emailSummary, setEmailSummary] = useState(null);
-  const [weeklyDigest, setWeeklyDigest] = useState(null);
-  const [popularTopics, setPopularTopics] = useState([]);
-  const [sentimentData, setSentimentData] = useState(null);
-  const [timePatterns, setTimePatterns] = useState(null);
-  const [timeframe, setTimeframe] = useState("week");
+  const [emailSummary, setEmailSummary] = useState<any>(null);
+  const [weeklyDigest, setWeeklyDigest] = useState<any>(null);
+  const [popularTopics, setPopularTopics] = useState<PopularTopic[]>([]);
+  const [sentimentData, setSentimentData] = useState<SentimentData | null>(
+    null
+  );
+  const [timePatterns, setTimePatterns] = useState<TimePattern | null>(null);
+  const [timeframe, setTimeframe] = useState<string>("week");
 
   useEffect(() => {
     const token = localStorage.getItem("auth_token");
@@ -188,11 +233,11 @@ export default function AnalyticsDashboard() {
 
       // Mock popular topics
       setPopularTopics([
-        { topic: "Project Update", count: 23, sentiment: "positive" },
-        { topic: "Meeting Request", count: 18, sentiment: "neutral" },
-        { topic: "Support Ticket", count: 15, sentiment: "negative" },
-        { topic: "Newsletter", count: 12, sentiment: "neutral" },
-        { topic: "Product Launch", count: 10, sentiment: "positive" },
+        { topic: "Project Update", count: 23, threads: ["t1", "t2"] },
+        { topic: "Meeting Request", count: 18, threads: ["t2"] },
+        { topic: "Support Ticket", count: 15, threads: ["t3"] },
+        { topic: "Newsletter", count: 12, threads: [] },
+        { topic: "Product Launch", count: 10, threads: [] },
       ]);
 
       // Mock sentiment data
@@ -203,15 +248,19 @@ export default function AnalyticsDashboard() {
           neutral: 25,
           negative: 10,
         },
-        trend: "up",
+        trends: [
+          { date: "2023-06-10", sentiment: "positive", value: 70 },
+          { date: "2023-06-11", sentiment: "neutral", value: 50 },
+          { date: "2023-06-12", sentiment: "negative", value: 30 },
+        ],
       });
 
       // Mock time patterns
       setTimePatterns({
         peak_times: [
-          { hour: 9, count: 42 },
-          { hour: 14, count: 35 },
-          { hour: 17, count: 28 },
+          { hour: "9:00", count: 42 },
+          { hour: "14:00", count: 35 },
+          { hour: "17:00", count: 28 },
         ],
         avg_response_by_hour: {
           morning: "15 minutes",
@@ -272,21 +321,21 @@ export default function AnalyticsDashboard() {
           subject: "Project Update - Q3 Goals",
           snippet: `... regarding ${searchQuery} ... we should discuss this at the next meeting.`,
           date: "2023-06-15T10:30:00Z",
-          sender: "john@company.com",
+          score: 0.8,
         },
         {
           thread_id: "t2",
           subject: `Discussion about ${searchQuery}`,
           snippet: "I think we should proceed with the plan as discussed...",
           date: "2023-06-14T16:45:00Z",
-          sender: "sarah@company.com",
+          score: 0.7,
         },
         {
           thread_id: "t3",
           subject: "Weekly Team Sync",
           snippet: `The ${searchQuery} initiative was mentioned in our last call...`,
           date: "2023-06-13T09:15:00Z",
-          sender: "team-lead@company.com",
+          score: 0.6,
         },
       ]);
     } catch (error) {
@@ -317,7 +366,7 @@ export default function AnalyticsDashboard() {
               <Th>Subject</Th>
               <Th>Snippet</Th>
               <Th>Date</Th>
-              <Th>Sender</Th>
+              <Th>Score</Th>
             </Tr>
           </Thead>
           <Tbody>
@@ -326,7 +375,7 @@ export default function AnalyticsDashboard() {
                 <Td fontWeight="bold">{result.subject}</Td>
                 <Td>{result.snippet}</Td>
                 <Td>{new Date(result.date).toLocaleDateString()}</Td>
-                <Td>{result.sender}</Td>
+                <Td>{result.score.toFixed(2)}</Td>
               </Tr>
             ))}
           </Tbody>
@@ -348,13 +397,7 @@ export default function AnalyticsDashboard() {
                 <Flex justify="space-between" align="center">
                   <Text fontWeight="bold">{topic.topic}</Text>
                   <Badge
-                    colorScheme={
-                      topic.sentiment === "positive"
-                        ? "green"
-                        : topic.sentiment === "negative"
-                        ? "red"
-                        : "gray"
-                    }
+                    colorScheme={topic.threads.length > 0 ? "green" : "gray"}
                   >
                     {topic.count} emails
                   </Badge>
@@ -382,47 +425,44 @@ export default function AnalyticsDashboard() {
             </StatNumber>
             <StatHelpText>
               <StatArrow
-                type={sentimentData?.trend === "up" ? "increase" : "decrease"}
+                type={
+                  sentimentData?.trends[sentimentData?.trends.length - 1]
+                    .sentiment === "positive"
+                    ? "increase"
+                    : "decrease"
+                }
               />
-              {sentimentData?.trend === "up" ? "Improving" : "Declining"}
+              {sentimentData?.trends[sentimentData?.trends.length - 1]
+                .sentiment === "positive"
+                ? "Improving"
+                : "Declining"}
             </StatHelpText>
           </Stat>
 
-          <Text mb={2}>Sentiment Breakdown</Text>
+          <Text mb={2}>Sentiment Trends</Text>
           <Stack spacing={3}>
-            <Box>
-              <Flex justify="space-between" mb={1}>
-                <Text fontSize="sm">Positive</Text>
-                <Text fontSize="sm">{sentimentData?.breakdown.positive}%</Text>
-              </Flex>
-              <Progress
-                value={sentimentData?.breakdown.positive}
-                colorScheme="green"
-                size="sm"
-              />
-            </Box>
-            <Box>
-              <Flex justify="space-between" mb={1}>
-                <Text fontSize="sm">Neutral</Text>
-                <Text fontSize="sm">{sentimentData?.breakdown.neutral}%</Text>
-              </Flex>
-              <Progress
-                value={sentimentData?.breakdown.neutral}
-                colorScheme="blue"
-                size="sm"
-              />
-            </Box>
-            <Box>
-              <Flex justify="space-between" mb={1}>
-                <Text fontSize="sm">Negative</Text>
-                <Text fontSize="sm">{sentimentData?.breakdown.negative}%</Text>
-              </Flex>
-              <Progress
-                value={sentimentData?.breakdown.negative}
-                colorScheme="red"
-                size="sm"
-              />
-            </Box>
+            {sentimentData?.trends.map((trend, index) => (
+              <Box key={index}>
+                <Flex justify="space-between" mb={1}>
+                  <Text fontSize="sm">{trend.date}</Text>
+                  <Text fontSize="sm">
+                    {trend.sentiment.charAt(0).toUpperCase() +
+                      trend.sentiment.slice(1)}
+                  </Text>
+                </Flex>
+                <Progress
+                  value={trend.value}
+                  colorScheme={
+                    trend.sentiment === "positive"
+                      ? "green"
+                      : trend.sentiment === "negative"
+                      ? "red"
+                      : "blue"
+                  }
+                  size="sm"
+                />
+              </Box>
+            ))}
           </Stack>
         </CardBody>
       </Card>
@@ -443,19 +483,21 @@ export default function AnalyticsDashboard() {
               Busiest Days
             </Text>
             <Flex justify="space-between" flexWrap="wrap">
-              {Object.entries(timePatterns?.days || {}).map(([day, count]) => (
-                <Tag
-                  key={day}
-                  m={1}
-                  size="md"
-                  variant="subtle"
-                  colorScheme="blue"
-                >
-                  <TagLabel>
-                    {day}: {count}
-                  </TagLabel>
-                </Tag>
-              ))}
+              {Object.entries(timePatterns?.days || {}).map(
+                ([day, count]: [string, number]) => (
+                  <Tag
+                    key={day}
+                    m={1}
+                    size="md"
+                    variant="subtle"
+                    colorScheme="blue"
+                  >
+                    <TagLabel>
+                      {day}: {count}
+                    </TagLabel>
+                  </Tag>
+                )
+              )}
             </Flex>
           </Box>
 
@@ -472,7 +514,7 @@ export default function AnalyticsDashboard() {
                   borderWidth="1px"
                   borderRadius="md"
                 >
-                  <StatLabel>{time.hour}:00</StatLabel>
+                  <StatLabel>{time.hour}</StatLabel>
                   <StatNumber>{time.count}</StatNumber>
                   <StatHelpText>emails</StatHelpText>
                 </Stat>
