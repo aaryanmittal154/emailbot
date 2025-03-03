@@ -27,9 +27,9 @@ class Settings(BaseSettings):
     PORT: int = int(os.getenv("PORT", "8000"))
 
     # CORS
-    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://emailbot-ten.vercel.app")
     CORS_ORIGINS: List[str] = [
-        "http://localhost:3000",  # Frontend dev server
+        "http://emailbot-ten.vercel.app",  # Frontend dev server
         "http://localhost:8080",  # Production deployment
         FRONTEND_URL,  # Dynamic frontend URL
     ]
