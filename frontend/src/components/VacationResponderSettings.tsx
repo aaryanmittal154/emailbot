@@ -26,7 +26,7 @@ import {
   enableGmailVacationResponder,
   disableGmailVacationResponder,
   getGmailRateLimitStatus,
-} from "../lib/api";
+} from "@/lib/api.wrapper";
 
 const VacationResponderSettings = () => {
   const toast = useToast();

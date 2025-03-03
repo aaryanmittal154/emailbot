@@ -35,7 +35,7 @@ import {
   getAutoReplyStatus,
   getGmailRateLimitStatus,
   resetGmailRateLimits,
-} from "../lib/api";
+} from "@/lib/api.wrapper";
 
 interface AutoReplyButtonProps {
   variant?: string;
