@@ -1,0 +1,70 @@
+# Python backend
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.env
+.env.local
+venv/
+ENV/
+.pytest_cache/
+
+# Next.js frontend
+node_modules/
+.next/
+out/
+.DS_Store
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.vercel
+.turbo
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# Editor settings
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Database
+*.sqlite
+*.db
+
+# Log files
+*.log
+logs/
+log/
+
+# Vector database and ML models
+*.bin
+*.vec
+*.model
+*.weights
+
+# Other
+.coverage
+.cache
+.hypothesis/
