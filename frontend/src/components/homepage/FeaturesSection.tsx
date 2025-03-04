@@ -40,6 +40,12 @@ import {
 } from "react-icons/fa";
 import { keyframes } from "@emotion/react";
 
+// Helper function for infinite repeats that satisfies Framer Motion's type requirements
+const infiniteRepeat = () => {
+  const repeatFn = (count: number) => "Infinity";
+  return repeatFn;
+};
+
 // Create Chakra-Framer-Motion components
 const ChakraBox = chakra(motion.div, {
   shouldForwardProp: (prop) =>
@@ -128,11 +134,15 @@ const Particle = ({
       opacity: [0.2, 0.8, 0.2],
       scale: [1, 1.2, 1],
     }}
-    transition={{
-      duration: duration,
-      delay: delay,
-      ease: "easeInOut",
-    }}
+    transition={
+      {
+        duration: duration,
+        delay: delay,
+        ease: "easeInOut",
+        repeat: infiniteRepeat(),
+        repeatType: "loop",
+      } as any
+    }
   />
 );
 
