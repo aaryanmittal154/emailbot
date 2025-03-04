@@ -55,6 +55,11 @@ const gridAnimation = keyframes`
 const MotionBox = motion(Box);
 const MotionFlex = motion(Flex);
 
+// Helper function for infinite repeats that satisfies Framer Motion's type requirements
+const infiniteRepeat = () => {
+  return 99999; // Very large number that effectively serves as an infinite loop
+};
+
 const Footer = () => {
   const bgColor = useColorModeValue("gray.50", "gray.900");
   const textColor = useColorModeValue("gray.600", "gray.400");
@@ -367,7 +372,7 @@ const Footer = () => {
                 initial={{ scale: 0.9, opacity: 0.8 }}
                 animate={{ scale: 1, opacity: 1 }}
                 transition={{
-                  repeat: 9999,
+                  repeat: infiniteRepeat(),
                   repeatType: "reverse",
                   duration: 3,
                   times: [0, 0.5, 1],

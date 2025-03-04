@@ -14,6 +14,12 @@ import { motion } from "framer-motion";
 import { keyframes } from "@emotion/react";
 import { FaRobot, FaArrowRight } from "react-icons/fa";
 
+// Helper function for infinite repeats that satisfies Framer Motion's type requirements
+const infiniteRepeat = () => {
+  const repeatFn = (count: number) => "Infinity";
+  return repeatFn;
+};
+
 // Animation keyframes
 const float = keyframes`
   0% { transform: translateY(0px) rotate(0deg); }
@@ -102,7 +108,7 @@ const CTASection = ({ onLogin, isLoading }: CTASectionProps) => {
               y: [0, -20, 0],
             }}
             transition={{
-              repeat: 9999,
+              repeat: infiniteRepeat(),
               repeatType: "reverse",
               duration: 4,
             }}
