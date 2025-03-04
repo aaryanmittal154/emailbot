@@ -14,6 +14,7 @@ import {
 } from "@chakra-ui/react";
 import { keyframes } from "@emotion/react";
 import { FaMoon, FaSun, FaBolt } from "react-icons/fa";
+import axios from "axios";
 
 // Animation for button glow - updated for continuous border effect
 const borderGlow = keyframes`
@@ -31,6 +32,7 @@ const pulse = keyframes`
 const Navbar = () => {
   const { colorMode, toggleColorMode } = useColorMode();
   const [scrolled, setScrolled] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -65,6 +67,26 @@ const Navbar = () => {
   const buttonBg = useColorModeValue("purple.400", "purple.500");
   const buttonHoverBg = useColorModeValue("purple.500", "purple.600");
   const buttonActiveBg = useColorModeValue("purple.600", "purple.700");
+
+  const handleSignIn = async () => {
+    try {
+      setIsLoading(true);
+      const response = await axios.get(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/auth/login`
+      );
+      // Check if the response has auth_url
+      if (response.data.auth_url) {
+        // Redirect to the Google OAuth URL
+        window.location.href = response.data.auth_url;
+      } else {
+        console.error("No auth_url found in response:", response.data);
+      }
+    } catch (error) {
+      console.error("Error during authentication:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <Box
@@ -108,26 +130,11 @@ const Navbar = () => {
               _hover={{ textDecoration: "none" }}
             >
               <Button
-                px={8}
-                py={6}
-                fontSize={"lg"}
-                fontWeight={600}
-                color={"white"}
-                bg={buttonBg}
-                borderWidth="2px"
-                borderColor="purple.400"
-                borderRadius="md"
-                _hover={{
-                  bg: buttonHoverBg,
-                  transform: "translateY(-2px)",
-                }}
-                _active={{
-                  bg: buttonActiveBg,
-                }}
-                sx={{
-                  animation: `${borderGlow} 1.5s infinite, ${pulse} 2s infinite`,
-                  position: "relative",
-                }}
+                colorScheme="purple"
+                size="md"
+                rounded="md"
+                onClick={handleSignIn}
+                isLoading={isLoading}
               >
                 Sign In
               </Button>
