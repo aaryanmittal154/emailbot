@@ -14,12 +14,6 @@ import { motion } from "framer-motion";
 import { keyframes } from "@emotion/react";
 import { FaRobot, FaArrowRight } from "react-icons/fa";
 
-// Helper function for infinite repeats that satisfies Framer Motion's type requirements
-const infiniteRepeat = () => {
-  const repeatFn = (count: number) => "Infinity";
-  return repeatFn;
-};
-
 // Animation keyframes
 const float = keyframes`
   0% { transform: translateY(0px) rotate(0deg); }
@@ -28,9 +22,9 @@ const float = keyframes`
 `;
 
 const glow = keyframes`
-  0% { box-shadow: 0 0 10px rgba(66, 153, 225, 0.3); }
+  0% { box-shadow: 0 0 10px rgba(128, 90, 213, 0.3); }
   50% { box-shadow: 0 0 30px rgba(159, 122, 234, 0.7); }
-  100% { box-shadow: 0 0 10px rgba(66, 153, 225, 0.3); }
+  100% { box-shadow: 0 0 10px rgba(128, 90, 213, 0.3); }
 `;
 
 const MotionBox = motion(Box);
@@ -44,7 +38,7 @@ const CTASection = ({ onLogin, isLoading }: CTASectionProps) => {
   // Colors
   const bgColor = useColorModeValue("gray.900", "gray.900");
   const textColor = useColorModeValue("gray.100", "gray.100");
-  const buttonBg = useColorModeValue("blue.400", "blue.400");
+  const buttonBg = useColorModeValue("purple.500", "purple.500");
 
   return (
     <Box
@@ -108,9 +102,7 @@ const CTASection = ({ onLogin, isLoading }: CTASectionProps) => {
               y: [0, -20, 0],
             }}
             transition={{
-              repeat: infiniteRepeat(),
-              repeatType: "reverse",
-              duration: 4,
+              duration: 2,
             }}
             mb={10}
           >
@@ -167,9 +159,9 @@ const CTASection = ({ onLogin, isLoading }: CTASectionProps) => {
               _hover={{
                 transform: "translateY(-2px)",
                 boxShadow: "xl",
-                bg: "blue.500",
+                bg: "purple.600",
               }}
-              _active={{ bg: "blue.600" }}
+              _active={{ bg: "purple.700" }}
               onClick={onLogin}
               isLoading={isLoading}
               loadingText="Connecting..."

@@ -95,11 +95,6 @@ const itemVariants = {
   },
 };
 
-// Helper function for infinite repeats that satisfies Framer Motion's type requirements
-const infiniteRepeat = () => {
-  return 99999; // Very large number that effectively serves as an infinite loop
-};
-
 // Particle component for background effect
 interface ParticleProps {
   size: number;
@@ -134,8 +129,6 @@ const Particle = ({
       scale: [1, 1.2, 1],
     }}
     transition={{
-      repeat: infiniteRepeat(),
-      repeatType: "loop",
       duration: duration,
       delay: delay,
       ease: "easeInOut",
