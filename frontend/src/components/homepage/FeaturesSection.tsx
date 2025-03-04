@@ -129,7 +129,7 @@ const Particle = ({
       scale: [1, 1.2, 1],
     }}
     transition={{
-      repeat: Infinity as number,
+      repeat: () => "Infinity",
       repeatType: "loop",
       duration: duration,
       delay: delay,
