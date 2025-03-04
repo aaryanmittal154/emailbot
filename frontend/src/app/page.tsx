@@ -23,9 +23,9 @@ export default function Home() {
     try {
       setIsLoading(true);
       const response = await axios.get(
-        `${process.env.NEXT_PUBLIC_API_URL}/auth/google/url`
+        `${process.env.NEXT_PUBLIC_API_URL}/auth/login`
       );
-      window.location.href = response.data.authUrl;
+      window.location.href = response.data.auth_url;
     } catch (error) {
       console.error("Error during authentication:", error);
       toast({
