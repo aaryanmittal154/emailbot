@@ -96,7 +96,23 @@ const itemVariants = {
 };
 
 // Particle component for background effect
-const Particle = ({ size, color, top, left, delay, duration }) => (
+interface ParticleProps {
+  size: number;
+  color: string;
+  top: string;
+  left: string;
+  delay: number;
+  duration: number;
+}
+
+const Particle = ({
+  size,
+  color,
+  top,
+  left,
+  delay,
+  duration,
+}: ParticleProps) => (
   <ChakraBox
     position="absolute"
     width={`${size}px`}
@@ -113,7 +129,8 @@ const Particle = ({ size, color, top, left, delay, duration }) => (
       scale: [1, 1.2, 1],
     }}
     transition={{
-      repeat: Infinity,
+      repeat: Infinity as number,
+      repeatType: "loop",
       duration: duration,
       delay: delay,
       ease: "easeInOut",
