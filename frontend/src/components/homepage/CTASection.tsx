@@ -102,7 +102,7 @@ const CTASection = ({ onLogin, isLoading }: CTASectionProps) => {
               y: [0, -20, 0],
             }}
             transition={{
-              repeat: Infinity as number,
+              repeat: 9999,
               repeatType: "reverse",
               duration: 4,
             }}

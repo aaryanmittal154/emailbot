@@ -367,7 +367,7 @@ const Footer = () => {
                 initial={{ scale: 0.9, opacity: 0.8 }}
                 animate={{ scale: 1, opacity: 1 }}
                 transition={{
-                  repeat: Infinity as number,
+                  repeat: 9999,
                   repeatType: "reverse",
                   duration: 3,
                   times: [0, 0.5, 1],
