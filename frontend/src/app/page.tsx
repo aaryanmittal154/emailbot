@@ -23,7 +23,7 @@ export default function Home() {
     try {
       setIsLoading(true);
       const response = await axios.get(
-        `${process.env.NEXT_PUBLIC_API_URL}/apiauth/login`
+        `${process.env.NEXT_PUBLIC_API_URL}/api/auth/login`
       );
       window.location.href = response.data.auth_url;
     } catch (error) {

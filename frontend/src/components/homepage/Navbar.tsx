@@ -10,6 +10,7 @@ import {
   Icon,
   HStack,
   useColorMode,
+  Link,
 } from "@chakra-ui/react";
 import { keyframes } from "@emotion/react";
 import { FaMoon, FaSun, FaBolt } from "react-icons/fa";
@@ -102,30 +103,35 @@ const Navbar = () => {
               size={"md"}
             />
 
-            <Button
-              px={8}
-              py={6}
-              fontSize={"lg"}
-              fontWeight={600}
-              color={"white"}
-              bg={buttonBg}
-              borderWidth="2px"
-              borderColor="purple.400"
-              borderRadius="md"
-              _hover={{
-                bg: buttonHoverBg,
-                transform: "translateY(-2px)",
-              }}
-              _active={{
-                bg: buttonActiveBg,
-              }}
-              sx={{
-                animation: `${borderGlow} 1.5s infinite, ${pulse} 2s infinite`,
-                position: "relative",
-              }}
+            <Link
+              href={`${process.env.NEXT_PUBLIC_API_URL}/api/auth/login`}
+              _hover={{ textDecoration: "none" }}
             >
-              Sign In
-            </Button>
+              <Button
+                px={8}
+                py={6}
+                fontSize={"lg"}
+                fontWeight={600}
+                color={"white"}
+                bg={buttonBg}
+                borderWidth="2px"
+                borderColor="purple.400"
+                borderRadius="md"
+                _hover={{
+                  bg: buttonHoverBg,
+                  transform: "translateY(-2px)",
+                }}
+                _active={{
+                  bg: buttonActiveBg,
+                }}
+                sx={{
+                  animation: `${borderGlow} 1.5s infinite, ${pulse} 2s infinite`,
+                  position: "relative",
+                }}
+              >
+                Sign In
+              </Button>
+            </Link>
           </HStack>
         </Flex>
       </Container>
