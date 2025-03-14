@@ -57,18 +57,148 @@ class EmailClassifierService:
                 .all()
             )
 
+            # Get the communication types category and its labels
+            communication_category = (
+                db.query(LabelCategory)
+                .filter(LabelCategory.name == "Communication Types")
+                .first()
+            )
+            if not communication_category:
+                logger.warning(
+                    "Communication Types category not found, initializing labels"
+                )
+                label_service.initialize_default_labels(db)
+                communication_category = (
+                    db.query(LabelCategory)
+                    .filter(LabelCategory.name == "Communication Types")
+                    .first()
+                )
+
+            communication_type_labels = (
+                db.query(EmailLabel)
+                .filter(EmailLabel.category_id == communication_category.id)
+                .all()
+            )
+
+            # Combine all labels for classification
+            all_labels = email_type_labels + communication_type_labels
+
             # Get email content to analyze
             email_content = EmailClassifierService._extract_email_content(thread_data)
 
             # Prepare the system prompt
             system_prompt = """
-            You are an AI assistant that classifies emails and extracts structured information.
-            Analyze the email content and classify it into ONE of these categories:
-            1. Job Posting: Emails containing job opportunities, listings, or recruitment needs.
-            2. Candidate: Emails from job applicants, about applicants, or candidate-related communications.
-            3. Event: Emails about events, meetings, webinars, conferences, or gatherings.
+            You are a specialized email classification system with STRICT categorization rules.
+            Your ONLY purpose is to analyze emails and assign them to EXACTLY ONE category with complete precision.
 
-            For each type, also extract these fields:
+            ## CLASSIFICATION HIERARCHY (FOLLOW THIS ORDER)
+
+            STEP 1: Identify if the email's PRIMARY FOCUS is:
+            - Describing an open job position → JOB POSTING
+            - Discussing a specific person's candidacy → CANDIDATE
+            - Announcing a scheduled gathering → EVENT
+            - Primarily asking for information → QUESTIONS
+            - Introducing a topic for discussion → DISCUSSION TOPICS
+            - If none of above apply → OTHER
+
+            STEP 2: If unclear from primary focus, use these DECISIVE INDICATORS:
+
+            FOR JOB POSTING (ANY of these):
+            - Subject contains: "hiring", "job opening", "position", "vacancy", "opportunity at [company]"
+            - Email describes specific role responsibilities
+            - Email lists job requirements or qualifications needed
+            - Email is written from an employer's perspective about their needs
+            - Email mentions application process for a specific role
+
+            FOR CANDIDATE (ANY of these):
+            - Subject contains: "candidate", "applicant", "resume", "seeking position", "looking for job"
+            - Email discusses someone's work history, skills, or qualifications
+            - Email is written from perspective of someone seeking work
+            - Email refers to a specific person being recommended or considered
+            - Email mentions matching people to jobs (rather than jobs to people)
+
+            FOR EVENT (ANY of these):
+            - Subject contains: "meeting", "webinar", "conference", "event", "session"
+            - Email mentions specific date, time and location for a gathering
+            - Email includes registration or attendance information
+            - Email describes agenda or speakers
+
+            FOR QUESTIONS (ANY of these):
+            - Subject or body contains multiple question marks
+            - Email specifically requests information, clarification, or explanations
+            - Email uses interrogative language (who, what, when, where, why, how)
+            - Email clearly states "I have a question" or similar phrasing
+            - Email asks for help on a specific topic
+
+            FOR DISCUSSION TOPICS (ANY of these):
+            - Email introduces a topic for team discussion or decision
+            - Email solicits opinions or feedback on a shared topic
+            - Email contains phrases like "let's discuss", "thoughts on", "what do you think about"
+            - Email continues an ongoing thread or conversation on a specific topic
+            - Email shares information with an invitation for response
+
+            FOR OTHER (ANY of these):
+            - Email doesn't clearly fit into any of the above categories
+            - Email contains multiple unrelated topics or general updates
+            - Email is administrative in nature (e.g., notifications, system messages)
+            - Email is a personal message unrelated to recruitment
+            - Email is a newsletter, marketing communication, or general announcement
+
+            ## DEFINITIVE RULES
+
+            1. SUBJECT LINE OVERRULES BODY in case of conflict, UNLESS the body CLEARLY contradicts the subject
+            2. MOST RECENT MESSAGE has priority over earlier messages
+            3. If discussing BOTH a job AND candidates, determine which is the MAIN PURPOSE:
+               - If evaluating candidates FOR a specific job → CANDIDATE
+               - If describing a job and mentioning ideal candidates → JOB POSTING
+            4. Matching/recommending candidates to jobs is ALWAYS → CANDIDATE
+            5. An email with a list of multiple job openings is ALWAYS → JOB POSTING
+            6. Messages with "Re:" prefix follow the same rules - classify by CONTENT not just by being a reply
+            7. If email contains multiple questions but is primarily about a job posting → JOB POSTING
+            8. If email introduces a discussion topic about candidates → CANDIDATE
+            9. Only classify as QUESTIONS if asking for information is the PRIMARY purpose
+            10. Only classify as DISCUSSION TOPICS if starting/continuing a discussion is the PRIMARY purpose
+            11. Use OTHER sparingly, ONLY when no other categories reasonably apply
+
+            ## UNAMBIGUOUS EXAMPLES
+
+            DEFINITE JOB POSTINGS:
+            - "Hiring a Full-Stack Developer at TechCorp" describing position details and application process
+            - "New Role: Senior Project Manager - $120K" listing job responsibilities
+            - "Re: Cloud Engineer Position" that primarily describes job requirements
+            - "We're expanding our team" describing open positions
+
+            DEFINITE CANDIDATES:
+            - "John Smith - Software Engineer Resume" containing someone's qualifications
+            - "Recommending Jane for the analyst role" discussing a specific person
+            - "Re: Candidate for Marketing Position" evaluating someone's fit
+            - "Looking for work in data science" from someone seeking employment
+            - "Matching developers to your open roles" about finding candidates for positions
+
+            DEFINITE QUESTIONS:
+            - "Question about the hiring process?" asking for procedural clarification
+            - "Can you explain the benefits package?" requesting specific information
+            - "What skills are required for this position?" asking about job requirements
+            - "How do I submit my resume?" asking about application procedures
+            - "When is the application deadline?" requesting timing information
+
+            DEFINITE DISCUSSION TOPICS:
+            - "Thoughts on our hiring strategy for Q3" introducing a topic for team input
+            - "Let's discuss the candidate evaluation process" starting a conversation
+            - "Feedback needed on job description draft" soliciting opinions
+            - "Continuing our conversation about the interview panel" extending a thread
+            - "I've been thinking about how we structure our recruitment" sharing ideas for discussion
+
+            DEFINITE OTHER:
+            - "Weekly department update" containing miscellaneous information
+            - "System notification: Your account password will expire" administrative message
+            - "Happy holidays from the team" personal or social message
+            - "Company newsletter" with general updates not specific to recruitment
+            - "Reminder: Submit your timesheet" administrative reminder
+
+            ## FIELD EXTRACTION
+
+            For each type, extract these fields:
 
             JOB POSTING:
             - company_name: The company offering the job
@@ -94,12 +224,36 @@ class EmailClassifierService:
             - description: Brief description of the event
             - registration_deadline: When to register by (if mentioned)
 
-            RESPONSE FORMAT:
-            Return a JSON object with:
-            1. "classification": ONE of ["Job Posting", "Candidate", "Event"]
-            2. "confidence": A number from 0-100 indicating confidence in the classification
-            3. "fields": An object containing the appropriate fields for the classification type
-            4. "reasoning": Brief explanation of why this classification was chosen
+            QUESTIONS:
+            - main_question: The primary question being asked
+            - topic: The subject or topic of the question
+            - urgency: Any indication of urgency (if mentioned)
+            - context: Brief context behind the question
+            - requested_information: Specific information being requested
+
+            DISCUSSION TOPICS:
+            - topic_title: Short title or name of the topic
+            - key_points: Main points or ideas being discussed
+            - action_items: Any proposed actions or next steps
+            - stakeholders: People involved or mentioned
+            - deadline: Any relevant deadlines mentioned
+
+            OTHER:
+            - summary: Brief summary of the content
+            - category: Best subcategory if possible (administrative, personal, etc.)
+            - action_required: Whether any action is needed (if applicable)
+            - sender_type: Type of sender (system, individual, organization)
+
+            ## CLASSIFICATION OUTPUT
+
+            After analyzing, output JSON with:
+            1. "classification": EXACTLY ONE of ["Job Posting", "Candidate", "Event", "Questions", "Discussion Topics", "Other"]
+            2. "confidence": A number from 0-100
+            3. "primary_indicators": List the SPECIFIC words/phrases that determined this classification
+            4. "fields": Extract the appropriate structured data
+            5. "reasoning": Brief explanation focusing on which DEFINITIVE RULE was applied
+
+            REMEMBER: Your categorization MUST be consistent and follow these rules EXACTLY.
             """
 
             # Generate the classification with GPT-4o-mini
@@ -124,40 +278,39 @@ class EmailClassifierService:
                 label = next(
                     (
                         label
-                        for label in email_type_labels
+                        for label in all_labels
                         if label.name == classification_result["classification"]
                     ),
                     None,
                 )
 
                 if label:
-                    # Apply the label to the thread with the calculated confidence
-                    confidence = classification_result.get("confidence", 85)
-                    thread_label = label_service.add_label_to_thread(
-                        thread_id=thread_data["thread_id"],
-                        label_id=label.id,
-                        user_id=user.id,
-                        confidence=confidence,
-                        is_confirmed=False,  # Auto-applied labels are not confirmed
+                    # Apply the label to the thread
+                    label_service.add_label_to_thread(
+                        thread_data["thread_id"],
+                        label.id,
+                        user.id,
+                        confidence=classification_result["confidence"],
+                        is_confirmed=False,
                         db=db,
                     )
 
                     logger.info(
-                        f"Applied label '{label.name}' to thread {thread_data['thread_id']} "
-                        f"with {confidence}% confidence"
+                        f"Applied label '{classification_result['classification']}' to thread {thread_data['thread_id']} with {classification_result['confidence']}% confidence"
                     )
+
+                    # Include category in thread data for vector indexing
+                    thread_data["category"] = classification_result["classification"]
 
                     # Return the classification data and label info
                     return {
                         "success": True,
                         "thread_id": thread_data["thread_id"],
                         "classification": classification_result["classification"],
-                        "confidence": confidence,
+                        "confidence": classification_result["confidence"],
                         "fields": classification_result.get("fields", {}),
                         "reasoning": classification_result.get("reasoning", ""),
                         "label_id": label.id,
-                        "label_name": label.name,
-                        "label_color": label.color,
                     }
                 else:
                     logger.warning(
@@ -187,40 +340,32 @@ class EmailClassifierService:
         # Get the messages in the thread
         messages = thread_data.get("messages", [])
 
-        # If there are messages, extract the content from the most recent one
+        # If there are messages, extract the content from the first/original email instead of the most recent
         if messages:
-            # Use the most recent (last) message for classification
-            latest_message = messages[-1]
+            # Use the first message (original email) for classification instead of the latest
+            original_message = messages[0]
 
-            content += f"From: {latest_message.get('sender', '(Unknown)')}\n"
+            content += f"From: {original_message.get('sender', '(Unknown)')}\n"
 
             # Extract recipients if available
-            recipients = latest_message.get("recipients", [])
+            recipients = original_message.get("recipients", [])
             if recipients:
                 content += f"To: {', '.join(recipients)}\n"
 
             # Add the message body or snippet
-            if "body" in latest_message and latest_message["body"]:
+            if "body" in original_message and original_message["body"]:
                 # For HTML content, we would want to extract just the text
                 # This is a simplified version
-                body = latest_message["body"]
+                body = original_message["body"]
                 # Remove HTML tags if present (very basic approach)
                 import re
 
                 body = re.sub(r"<[^>]*>", " ", body)
                 content += f"\nBody:\n{body}"
-            elif "snippet" in latest_message:
-                content += f"\nBody:\n{latest_message['snippet']}"
+            elif "snippet" in original_message:
+                content += f"\nBody:\n{original_message['snippet']}"
 
-            # Add context from earlier messages if needed
-            if len(messages) > 1:
-                content += "\n\nEarlier in the conversation:\n"
-                for i, message in enumerate(messages[:-1]):
-                    if i > 2:  # Limit to 3 previous messages to avoid too much content
-                        break
-                    content += f"Message from {message.get('sender', '(Unknown)')}:\n"
-                    if "snippet" in message:
-                        content += f"{message['snippet']}\n\n"
+            # No need to add context from other messages since we're focusing only on the original email
 
         return content
 

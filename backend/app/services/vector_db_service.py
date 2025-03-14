@@ -92,6 +92,8 @@ class VectorDBService:
                     if "text_content" in thread_data
                     else ""
                 ),
+                # Store the category if available
+                "category": thread_data.get("category", ""),
             }
 
             # Upsert to Pinecone
@@ -123,7 +125,11 @@ class VectorDBService:
             return False
 
     def search_threads(
-        self, user_id: int, query_embedding: List[float], top_k: int = 10
+        self,
+        user_id: int,
+        query_embedding: List[float],
+        top_k: int = 10,
+        filter_category: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Search for similar email threads using vector similarity
@@ -132,44 +138,78 @@ class VectorDBService:
             user_id: The ID of the user performing the search
             query_embedding: The embedding vector of the search query
             top_k: Number of results to return
+            filter_category: Optionally filter results to a specific category (e.g., "Job Posting" or "Candidate")
 
         Returns:
             List of thread metadata ordered by relevance
         """
         try:
-            results = self.index.query(
-                vector=query_embedding,
-                top_k=top_k,
-                namespace=f"{PINECONE_NAMESPACE}_{user_id}",
-                include_metadata=True,
-            )
+            # Prepare filter conditions
+            filter_condition = {}
+
+            # Always filter by user_id
+            filter_condition["user_id"] = user_id
+
+            # Optionally filter by category
+            if filter_category:
+                filter_condition["category"] = filter_category
+                print(f"Filtering by category: {filter_category}")
+
+            # Execute the query with error handling
+            try:
+                results = self.index.query(
+                    vector=query_embedding,
+                    top_k=top_k * 3,  # Fetch more items to account for filtering
+                    namespace=f"{PINECONE_NAMESPACE}_{user_id}",
+                    include_metadata=True,
+                    filter=filter_condition,
+                )
+            except Exception as query_error:
+                print(f"Vector query error: {str(query_error)}")
+                # Return empty results instead of failing completely
+                return []
 
             # Format the results
             formatted_results = []
             for match in results["matches"]:
-                # Convert participants back from JSON string
-                participants = json.loads(match["metadata"].get("participants", "[]"))
+                try:
+                    # Convert participants back from JSON string
+                    participants = json.loads(
+                        match["metadata"].get("participants", "[]")
+                    )
 
-                formatted_results.append(
-                    {
-                        "thread_id": match["metadata"]["thread_id"],
-                        "subject": match["metadata"]["subject"],
-                        "participants": participants,
-                        "message_count": int(match["metadata"]["message_count"]),
-                        "last_updated": match["metadata"]["last_updated"],
-                        "text_preview": match["metadata"].get("text_preview", ""),
-                        "full_content": match["metadata"].get(
-                            "full_content", ""
-                        ),  # Include full content in results
-                        "score": match["score"],  # Similarity score
-                    }
-                )
+                    formatted_results.append(
+                        {
+                            "thread_id": match["metadata"]["thread_id"],
+                            "subject": match["metadata"]["subject"],
+                            "participants": participants,
+                            "message_count": int(match["metadata"]["message_count"]),
+                            "last_updated": match["metadata"]["last_updated"],
+                            "text_preview": match["metadata"].get("text_preview", ""),
+                            "full_content": match["metadata"].get(
+                                "full_content", ""
+                            ),  # Include full content in results
+                            "category": match["metadata"].get(
+                                "category", ""
+                            ),  # Include category in results
+                            "score": match["score"],  # Similarity score
+                        }
+                    )
 
+                    # Limit to requested number of results after filtering
+                    if len(formatted_results) >= top_k:
+                        break
+                except Exception as format_error:
+                    # Skip malformed results rather than failing completely
+                    print(f"Error formatting search result: {str(format_error)}")
+                    continue
+
+            print(f"Found {len(formatted_results)} results matching the query")
             return formatted_results
 
         except Exception as e:
             print(f"Error searching threads: {str(e)}")
-            return []
+            return []  # Return empty list instead of failing
 
     def get_stats(self) -> Dict[str, Any]:
         """Get stats about the Pinecone index"""

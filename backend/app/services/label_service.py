@@ -1,11 +1,14 @@
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from sqlalchemy.orm import Session
 from fastapi import Depends, HTTPException, status
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 import logging
 import random
+import json
+from datetime import datetime
+import re
 
 from app.models.email_label import LabelCategory, EmailLabel, ThreadLabel, LabelFeedback
 from app.models.user import User
@@ -13,8 +16,17 @@ from app.db.database import get_db
 from app.services.auth_service import get_current_user
 from app.services.embedding_service import create_thread_embedding
 from app.services.vector_db_service import vector_db
-from app.services.email_service import email_service
 from app.models.email import EmailMetadata as Email
+from app.schemas.label import (
+    EmailLabelCreate as LabelCreate,
+    EmailLabelUpdate as LabelUpdate,
+    LabelCategoryCreate,
+    LabelCategoryUpdate,
+    ThreadLabelCreate,
+    ThreadLabelUpdate,
+    LabelFeedbackCreate,
+    LabelSuggestionResponse,
+)
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -140,6 +152,45 @@ class EmailLabelService:
                 ),  # Google Red
             ]
             db.add_all(candidate_labels)
+            db.commit()
+
+        # Create communication types category and labels if they don't exist
+        communication_category = (
+            db.query(LabelCategory)
+            .filter(LabelCategory.name == "Communication Types")
+            .first()
+        )
+        if not communication_category:
+            communication_category = LabelCategory(
+                name="Communication Types",
+                description="Labels for general communication patterns",
+            )
+            db.add(communication_category)
+            db.commit()  # Commit to get the ID
+            db.refresh(communication_category)
+
+            # Create communication-related labels
+            communication_labels = [
+                EmailLabel(
+                    name="Questions",
+                    category_id=communication_category.id,
+                    description="Emails primarily asking for information or clarification",
+                    color="#A142F4",  # Purple
+                ),
+                EmailLabel(
+                    name="Discussion Topics",
+                    category_id=communication_category.id,
+                    description="Emails introducing or continuing topical discussions",
+                    color="#F6BF26",  # Amber/Gold
+                ),
+                EmailLabel(
+                    name="Other",
+                    category_id=communication_category.id,
+                    description="Emails that don't fit other categories",
+                    color="#9AA0A6",  # Gray
+                ),
+            ]
+            db.add_all(communication_labels)
             db.commit()
 
         logger.info("Default labels initialized")
@@ -374,8 +425,11 @@ class EmailLabelService:
         5. Returns the top N labels based on confidence score
         """
         try:
+            # Import get_thread function locally to avoid circular imports
+            from app.services.email_service import get_thread
+
             # Get thread data
-            thread = email_service["get_thread"](thread_id=thread_id, user=user, db=db)
+            thread = get_thread(thread_id=thread_id, user=user, db=db)
 
             # Get text content from thread messages
             thread_text = ""

@@ -17,6 +17,22 @@ class AutoReplyConfig(BaseModel):
         default=False,
         description="Whether to use Gmail's built-in vacation responder instead of custom auto-replies",
     )
+    is_using_push_notifications: bool = Field(
+        default=False,
+        description="Whether to use Gmail push notifications for instant auto-replies",
+    )
+    push_notification_expiry: Optional[str] = Field(
+        default=None,
+        description="ISO timestamp for when the push notification subscription expires",
+    )
+    push_notification_history_id: Optional[str] = Field(
+        default=None,
+        description="Gmail history ID for tracking changes since push notification setup",
+    )
+    push_notification_topic: Optional[str] = Field(
+        default=None,
+        description="Google Cloud Pub/Sub topic for receiving Gmail notifications",
+    )
 
     class Config:
         json_schema_extra = {
@@ -25,6 +41,10 @@ class AutoReplyConfig(BaseModel):
                 "max_threads_per_check": 20,
                 "auto_reply_signature": "Best regards,\nJohn",
                 "is_using_gmail_responder": False,
+                "is_using_push_notifications": True,
+                "push_notification_expiry": "2025-03-17T16:34:35+00:00",
+                "push_notification_history_id": "12345",
+                "push_notification_topic": "projects/my-project/topics/gmail-notifications-user-1"
             }
         }
 
@@ -57,3 +77,11 @@ class AutoReplyStatus(BaseModel):
     last_check_time: Optional[datetime] = None
     total_replies_sent: int = 0
     rate_limit: Optional[RateLimitInfo] = None
+    push_notifications: Dict[str, Any] = Field(
+        default_factory=lambda: {
+            "enabled": False,
+            "expiration": None,
+            "last_renewed": None,
+        },
+        description="Status of push notifications setup",
+    )

@@ -158,7 +158,7 @@ export default function AnalyticsDashboard() {
 
     // Set up axios defaults
     axios.defaults.headers.common["Authorization"] = `Bearer ${token}`;
-    axios.defaults.baseURL = "https://emailbot-k8s7.onrender.com";
+    axios.defaults.baseURL = "http://localhost:8000/api/auth/callback";
 
     fetchUserData();
   }, [router]);

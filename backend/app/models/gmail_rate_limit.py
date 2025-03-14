@@ -1,5 +1,6 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey
 from sqlalchemy.sql import func
+from sqlalchemy.orm import relationship
 
 from app.db.database import Base
 
@@ -10,11 +11,14 @@ class GmailRateLimit(Base):
     __tablename__ = "gmail_rate_limits"
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
     limit_type = Column(String, nullable=False)  # e.g., "send_email", "general"
     retry_after = Column(DateTime, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=func.now(), nullable=False)
+
+    # Define the relationship back to User
+    user = relationship("User", back_populates="rate_limits")
 
     @classmethod
     def get_active_limit(cls, db, user_id, limit_type="send_email"):

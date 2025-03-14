@@ -15,10 +15,16 @@ export default function AuthCallback() {
     const token = searchParams.get("token");
     const userId = searchParams.get("user_id");
 
+    console.log("Auth callback received params:", {
+      token: token ? `${token.substring(0, 10)}...` : "null",
+      userId,
+    });
+
     if (token && userId) {
       // Store token in localStorage
       localStorage.setItem("auth_token", token);
       localStorage.setItem("user_id", userId);
+      console.log("Token and user ID stored in localStorage");
 
       toast({
         title: "Login successful",
@@ -30,9 +36,11 @@ export default function AuthCallback() {
 
       // Redirect to dashboard or home
       setTimeout(() => {
+        console.log("Redirecting to dashboard...");
         router.push("/dashboard");
       }, 2000);
     } else {
+      console.error("Authentication failed: Missing token or user ID");
       setError("Authentication failed. Please try again.");
     }
   }, [searchParams, router, toast]);

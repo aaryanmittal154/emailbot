@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useContext } from "react";
 import {
   Box,
   Flex,
@@ -30,10 +30,14 @@ const pulse = keyframes`
 `;
 
 const Navbar = () => {
+  // First all the context hooks
   const { colorMode, toggleColorMode } = useColorMode();
+
+  // All state hooks
   const [scrolled, setScrolled] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
+  // Effect hooks
   useEffect(() => {
     const handleScroll = () => {
       if (window.scrollY > 60) {
@@ -49,28 +53,28 @@ const Navbar = () => {
     };
   }, []);
 
+  // Then derived values using hooks
   const bgColor = useColorModeValue(
     scrolled ? "white" : "transparent",
     scrolled ? "gray.900" : "transparent"
   );
-
   const textColor = useColorModeValue("gray.800", "white");
-
   const boxShadow = scrolled
     ? useColorModeValue(
         "0 4px 6px rgba(160, 174, 192, 0.1)",
         "0 4px 6px rgba(0, 0, 0, 0.3)"
       )
     : "none";
-
-  // Button styles
   const buttonBg = useColorModeValue("purple.400", "purple.500");
   const buttonHoverBg = useColorModeValue("purple.500", "purple.600");
   const buttonActiveBg = useColorModeValue("purple.600", "purple.700");
 
+  // Event handlers after all hooks
   const handleSignIn = async () => {
     try {
       setIsLoading(true);
+      // Log the API URL for debugging
+      console.log(`Connecting to API at: ${process.env.NEXT_PUBLIC_API_URL}`);
       const response = await axios.get(
         `${process.env.NEXT_PUBLIC_API_URL}/api/auth/login`
       );

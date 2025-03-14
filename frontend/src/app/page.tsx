@@ -22,6 +22,8 @@ export default function Home() {
   const handleLogin = async () => {
     try {
       setIsLoading(true);
+      // Log the API URL for debugging
+      console.log(`Connecting to API at: ${process.env.NEXT_PUBLIC_API_URL}`);
       const response = await axios.get(
         `${process.env.NEXT_PUBLIC_API_URL}/api/auth/login`
       );

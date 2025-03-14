@@ -38,8 +38,10 @@ import {
   ModalCloseButton,
   useDisclosure,
   Tooltip,
+  HStack,
 } from "@chakra-ui/react";
 import { ArrowBackIcon, ChevronDownIcon, InfoIcon } from "@chakra-ui/icons";
+import { FiSettings, FiLogOut } from "react-icons/fi";
 import axios from "axios";
 import AutoReplyButton from "../../components/AutoReplyButton";
 import VacationResponderSettings from "../../components/VacationResponderSettings";
@@ -142,6 +144,8 @@ export default function Dashboard() {
   const [jobPostings, setJobPostings] = useState<any[]>([]);
   const [candidates, setCandidates] = useState<any[]>([]);
   const [events, setEvents] = useState<any[]>([]);
+  const [questions, setQuestions] = useState<any[]>([]);
+  const [discussions, setDiscussions] = useState<any[]>([]);
   const [loadingLabeled, setLoadingLabeled] = useState<boolean>(false);
   const [selectedLabeledEmail, setSelectedLabeledEmail] = useState<any>(null);
   const [extractedFields, setExtractedFields] = useState<any>(null);
@@ -347,10 +351,25 @@ export default function Dashboard() {
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem("auth_token");
-    localStorage.removeItem("user_id");
-    router.push("/");
+  const handleLogout = async () => {
+    try {
+      // Call the backend logout endpoint to disable background service
+      const token = localStorage.getItem("auth_token");
+      if (token) {
+        await axios.post("/api/auth/logout", {}, {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+      }
+    } catch (error) {
+      console.error("Error during logout:", error);
+    } finally {
+      // Always clear local storage and redirect, even if the API call fails
+      localStorage.removeItem("auth_token");
+      localStorage.removeItem("user_id");
+      router.push("/");
+    }
   };
 
   const fetchThread = async (threadId: string) => {
@@ -462,15 +481,19 @@ export default function Dashboard() {
   const fetchLabeledEmails = async () => {
     setLoadingLabeled(true);
     try {
-      const [jobPostingsRes, candidatesRes, eventsRes] = await Promise.all([
+      const [jobPostingsRes, candidatesRes, eventsRes, questionsRes, discussionsRes] = await Promise.all([
         getEmailsByLabel("Job Posting"),
         getEmailsByLabel("Candidate"),
         getEmailsByLabel("Event"),
+        getEmailsByLabel("Question"),
+        getEmailsByLabel("Discussion"),
       ]);
 
       setJobPostings(jobPostingsRes.data);
       setCandidates(candidatesRes.data);
       setEvents(eventsRes.data);
+      setQuestions(questionsRes.data);
+      setDiscussions(discussionsRes.data);
     } catch (error) {
       console.error("Error fetching labeled emails:", error);
     } finally {
@@ -1058,22 +1081,27 @@ export default function Dashboard() {
                     <Text fontWeight="bold" minWidth="120px">
                       Location:
                     </Text>
-                    <Text>{extractedFields.location || "Not specified"}</Text>
+                    <Text>
+                      {extractedFields.location || "Not specified"}
+                    </Text>
                   </Flex>
+
+                  {extractedFields.salary_range && (
+                    <Flex align="baseline" mt={2}>
+                      <Text fontWeight="bold" minWidth="120px">
+                        Salary Range:
+                      </Text>
+                      <Text>
+                        {extractedFields.salary_range}
+                      </Text>
+                    </Flex>
+                  )}
                 </Box>
 
                 <Box>
                   <Heading size="sm" mb={2}>
                     Job Details
                   </Heading>
-                  <Flex align="baseline" mt={2}>
-                    <Text fontWeight="bold" minWidth="120px">
-                      Salary Range:
-                    </Text>
-                    <Text>
-                      {extractedFields.salary_range || "Not specified"}
-                    </Text>
-                  </Flex>
                   <Flex align="baseline" mt={2}>
                     <Text fontWeight="bold" minWidth="120px">
                       Requirements:
@@ -1360,7 +1388,24 @@ export default function Dashboard() {
     <Container maxW="container.xl" py={8}>
       <Flex justify="space-between" align="center" mb={8}>
         <Heading>Superconnector Email</Heading>
-        <Button onClick={handleLogout}>Logout</Button>
+        <HStack spacing={3}>
+          <Button
+            leftIcon={<FiSettings />}
+            colorScheme="teal"
+            variant="outline"
+            onClick={() => router.push("/settings/background-service")}
+          >
+            Settings
+          </Button>
+          <Button
+            leftIcon={<FiLogOut />}
+            colorScheme="red"
+            variant="outline"
+            onClick={handleLogout}
+          >
+            Logout
+          </Button>
+        </HStack>
       </Flex>
 
       {user && (
@@ -1498,6 +1543,8 @@ export default function Dashboard() {
               )}
               <Tab>Job Postings</Tab>
               <Tab>Candidates</Tab>
+              <Tab>Questions</Tab>
+              <Tab>Discussion Topics</Tab>
               <Tab>Events</Tab>
               <Tab onClick={() => router.push("/analytics")}>Analytics</Tab>
               <Tab>Settings</Tab>
@@ -1808,6 +1855,50 @@ export default function Dashboard() {
                       </Button>
                     </Flex>
                     {renderLabeledEmailList(candidates, "Candidate")}
+                  </Box>
+                )}
+              </TabPanel>
+
+              {/* Questions Tab */}
+              <TabPanel p={0} pt={4}>
+                {selectedLabeledEmail &&
+                selectedLabeledEmail.category === "Question" ? (
+                  renderLabeledEmailView()
+                ) : (
+                  <Box p={4} bg="white" borderRadius="md" shadow="sm">
+                    <Flex justify="space-between" align="center" mb={4}>
+                      <Heading size="md">Questions</Heading>
+                      <Button
+                        size="sm"
+                        onClick={fetchLabeledEmails}
+                        leftIcon={<ArrowBackIcon />}
+                      >
+                        Refresh
+                      </Button>
+                    </Flex>
+                    {renderLabeledEmailList(questions, "Question")}
+                  </Box>
+                )}
+              </TabPanel>
+
+              {/* Discussion Topics Tab */}
+              <TabPanel p={0} pt={4}>
+                {selectedLabeledEmail &&
+                selectedLabeledEmail.category === "Discussion" ? (
+                  renderLabeledEmailView()
+                ) : (
+                  <Box p={4} bg="white" borderRadius="md" shadow="sm">
+                    <Flex justify="space-between" align="center" mb={4}>
+                      <Heading size="md">Discussion Topics</Heading>
+                      <Button
+                        size="sm"
+                        onClick={fetchLabeledEmails}
+                        leftIcon={<ArrowBackIcon />}
+                      >
+                        Refresh
+                      </Button>
+                    </Flex>
+                    {renderLabeledEmailList(discussions, "Discussion")}
                   </Box>
                 )}
               </TabPanel>

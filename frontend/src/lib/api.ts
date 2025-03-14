@@ -1,8 +1,7 @@
 import axios from "axios";
 
 // API endpoint base URL
-const BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || "https://emailbot-k8s7.onrender.com";
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 // Set up axios instance
 const api = axios.create({
@@ -35,6 +34,32 @@ export const searchEmails = async (query) => {
   return api.post("/api/emails/semantic-search", { query });
 };
 
+/**
+ * Enhanced semantic search that can search across multiple categories
+ * This preserves all existing functionality while adding cross-category support
+ * @param query The search query text
+ * @param includeCategories Array of category labels to include in search (empty means all)
+ * @param excludeCategories Array of category labels to exclude from search
+ * @param topK Number of results to return
+ * @param timestamp Optional timestamp for cache-busting
+ * @returns Promise with search results from multiple categories
+ */
+export const semanticSearchMultiCategory = async (
+  query: string,
+  includeCategories: string[] = [],
+  excludeCategories: string[] = [],
+  topK: number = 10,
+  timestamp?: number
+) => {
+  return api.post("/api/emails/semantic-search-multi", {
+    query,
+    include_categories: includeCategories,
+    exclude_categories: excludeCategories,
+    top_k: topK,
+    t: timestamp || Date.now(), // Add timestamp for cache-busting
+  });
+};
+
 export const indexEmails = async (maxThreads = 100) => {
   return api.post("/api/emails/semantic-index", { max_threads: maxThreads });
 };
@@ -45,6 +70,10 @@ export const triggerAutoReply = async (maxResults = 20, useHtml = false) => {
     max_results: maxResults,
     use_html: useHtml,
   });
+};
+
+export const setupPushNotifications = async () => {
+  return api.post("/api/auto-reply/setup-push-notifications");
 };
 
 export const getAutoReplyConfig = async () => {
@@ -202,12 +231,28 @@ export const addLabelFeedback = async (
 // New functions for the labeled emails
 export const getEmailsByLabel = async (
   labelName: string,
-  page = 1,
-  maxResults = 20
+  options: { page?: number; max_results?: number; limit?: number; t?: number } | number = {},
+  legacyMaxResults?: number
 ) => {
-  return api.get(`/api/emails/labeled/${labelName}`, {
-    params: { page, max_results: maxResults },
-  });
+  // Handle both old-style and new-style parameter formats for backward compatibility
+  let params: any = {};
+  
+  if (typeof options === 'number') {
+    // Old style: page parameter
+    params.page = options;
+    params.max_results = legacyMaxResults || 20; // Default to 20 if not provided
+  } else {
+    // New style: options object
+    params = {
+      page: options.page || 1,
+      max_results: options.max_results || options.limit || 20,
+    };
+    
+    // Add any additional parameters like timestamp, but exclude ones we've already processed
+    if (options.t) params.t = options.t;
+  }
+  
+  return api.get(`/api/emails/labeled/${labelName}`, { params });
 };
 
 export const classifyThread = async (threadId: string) => {
@@ -231,6 +276,34 @@ export const getSimilarThreads = async (
       thread_id: threadId,
       target_label: targetLabel,
       top_k: topK,
+    },
+  });
+};
+
+/**
+ * Get threads similar to a specific thread across multiple categories
+ * This enhances the existing getSimilarThreads by allowing multi-category search
+ * @param threadId The ID of the thread to find similar threads for
+ * @param includeCategories Array of category labels to include (empty = all)
+ * @param excludeCategories Array of category labels to exclude
+ * @param topK Number of similar threads to return
+ * @param timestamp Optional timestamp for cache-busting
+ * @returns Promise with similar threads from multiple categories
+ */
+export const getSimilarThreadsMultiCategory = async (
+  threadId: string,
+  includeCategories: string[] = [],
+  excludeCategories: string[] = [],
+  topK: number = 10,
+  timestamp?: number
+) => {
+  return api.get("/api/emails/similar-multi", {
+    params: {
+      thread_id: threadId,
+      include_categories: includeCategories.join(','),
+      exclude_categories: excludeCategories.join(','),
+      top_k: topK,
+      t: timestamp || Date.now(), // Add timestamp for cache-busting
     },
   });
 };
@@ -280,6 +353,81 @@ export const getSearchSuggestions = async (query: string) => {
   return api.get("/api/search/suggest", {
     params: { q: query },
   });
+};
+
+// Job-Candidate Matching API calls
+/**
+ * Find candidates that match a job posting
+ * @param jobThreadId The thread ID of the job posting
+ * @param topK Number of candidates to return
+ * @returns Promise with matching candidates
+ */
+export const getMatchingCandidates = async (
+  jobThreadId: string,
+  topK: number = 3
+) => {
+  return api.get(`/api/matches/job/${jobThreadId}/candidates`, {
+    params: { top_k: topK },
+  });
+};
+
+/**
+ * Find job postings that match a candidate
+ * @param candidateThreadId The thread ID of the candidate
+ * @param topK Number of jobs to return
+ * @returns Promise with matching jobs
+ */
+export const getMatchingJobs = async (
+  candidateThreadId: string,
+  topK: number = 3
+) => {
+  return api.get(`/api/matches/candidate/${candidateThreadId}/jobs`, {
+    params: { top_k: topK },
+  });
+};
+
+/**
+ * Get previous matches for a thread
+ * @param threadId The thread ID
+ * @param matchType Either 'job_to_candidate' or 'candidate_to_job'
+ * @param limit Maximum number of matches to return
+ * @returns Promise with match history
+ */
+export const getMatchHistory = async (
+  threadId: string,
+  matchType: string,
+  limit: number = 10
+) => {
+  return api.get(`/api/matches/history/${threadId}`, {
+    params: { match_type: matchType, limit },
+  });
+};
+
+// Onboarding
+export const setOnboardingPreferences = (preferences: {
+  max_emails_to_index: number;
+}) => {
+  return api.post("/api/auth/onboarding", preferences);
+};
+
+// Update email access preferences after onboarding
+export const updateEmailPreferences = (preferences: {
+  max_emails_to_index: number;
+}) => {
+  return api.post("/api/auth/update-email-preferences", preferences);
+};
+
+export const setupRealtimeNotifications = async () => {
+  return api.post("/api/auto-reply/setup-realtime-notifications");
+};
+
+/**
+ * Get the URL for Google login with offline access
+ * @param redirectUri Where to redirect after successful authentication
+ * @returns Google auth URL with proper scopes for offline access
+ */
+export const getOfflineAccessUrl = (redirectUri: string = '/dashboard') => {
+  return `/api/auth/login?offline_access=true&redirect_uri=${encodeURIComponent(redirectUri)}`;
 };
 
 export default api;

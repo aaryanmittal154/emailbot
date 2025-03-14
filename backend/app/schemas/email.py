@@ -54,6 +54,7 @@ class SendEmailRequest(BaseModel):
     html: Optional[bool] = False
     in_reply_to: Optional[str] = None
     references: Optional[List[str]] = None
+    suppress_quote: Optional[bool] = False
 
 
 class SendEmailResponse(BaseModel):

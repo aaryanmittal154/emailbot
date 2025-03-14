@@ -42,8 +42,7 @@ import { keyframes } from "@emotion/react";
 
 // Helper function for infinite repeats that satisfies Framer Motion's type requirements
 const infiniteRepeat = () => {
-  const repeatFn = (count: number) => "Infinity";
-  return repeatFn;
+  return Infinity;
 };
 
 // Create Chakra-Framer-Motion components
@@ -155,6 +154,13 @@ interface Feature {
   color: string;
   tag: string;
   codeSnippet: string;
+}
+
+// Define interface for Circle component props
+interface CircleProps {
+  icon: React.ElementType;
+  color: string;
+  size: string;
 }
 
 const FeaturesSection = () => {
@@ -546,7 +552,7 @@ const FeaturesSection = () => {
 };
 
 // Helper component for icon circles
-const Circle = ({ icon, color, size }) => (
+const Circle = ({ icon, color, size }: CircleProps) => (
   <Flex
     width={size}
     height={size}

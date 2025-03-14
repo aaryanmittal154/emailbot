@@ -36,3 +36,6 @@ class EmailMetadata(Base):
 
     # Relationships
     user = relationship("User", backref="emails")
+
+# For backward compatibility
+Email = EmailMetadata

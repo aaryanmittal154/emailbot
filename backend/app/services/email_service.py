@@ -1,27 +1,43 @@
-from fastapi import Depends, HTTPException, status
-from sqlalchemy.orm import Session
-from googleapiclient.discovery import build
-from google.oauth2.credentials import Credentials
 import base64
-from email.mime.text import MIMEText
-from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any, Optional
-import json
 import time
+import json
+import re
+import asyncio
+from datetime import datetime, timedelta, timezone
+import html
+from typing import List, Dict, Any, Optional, Tuple
+from sqlalchemy.orm import Session
 from sqlalchemy import func
+import os
 
 from app.db.database import get_db
 from app.models.user import User
 from app.models.email import EmailMetadata as Email
-from app.schemas.email import (
-    EmailCreate,
-    EmailResponse,
-    ThreadResponse,
-    SendEmailRequest,
-)
-from app.services.auth_service import get_current_user, get_google_creds
-from app.services.embedding_service import process_thread_for_semantic_search
+from app.services.auth_service import get_google_creds
 from app.services.vector_db_service import vector_db
+from fastapi import Depends, HTTPException
+from fastapi import status
+from app.schemas.email import SendEmailRequest
+from googleapiclient.discovery import build
+from google.oauth2.credentials import Credentials
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from typing import List, Dict, Any, Optional
+import os
+import asyncio
+import re
+import html
+
+from app.services.auth_service import get_current_user
+from app.services.embedding_service import process_thread_for_semantic_search
+from app.utils.thread_utils import get_thread_category
+
+# Import the email classifier - we'll use it in index_all_threads
+try:
+    from app.services.email_classifier_service import email_classifier
+except ImportError:
+    email_classifier = None
+    print("WARNING: email_classifier could not be imported")
 
 
 def get_gmail_service(credentials: Credentials):
@@ -61,17 +77,38 @@ def list_messages(
 
         # If we're using cache and it's not a search query, try to get from database first
         if use_cache and not q and not label_ids:
-            # Check if we have emails in the database
-            existing_emails = (
+            # First get the timestamp of when initial indexing completed
+            # This will be used to differentiate between initial indexed emails and new ones
+            # We define it as the earliest creation date of any indexed email
+            earliest_email = (
                 db.query(Email)
                 .filter(Email.user_id == user.id)
-                .order_by(Email.date.desc())
-                .offset(offset)
-                .limit(max_results)
-                .all()
+                .order_by(Email.created_at.asc())
+                .first()
             )
+            
+            if earliest_email:
+                initial_indexing_timestamp = earliest_email.created_at
+                print(f"Initial indexing timestamp: {initial_indexing_timestamp}")
+            else:
+                # No emails yet
+                initial_indexing_timestamp = None
+                
+            # Get all emails that are either:
+            # 1. Part of the initial set (limited by user preference) OR
+            # 2. Added after the initial indexing (new emails)
+            query = db.query(Email).filter(Email.user_id == user.id)
+            
+            # Always order by date descending (newest first)
+            query = query.order_by(Email.date.desc())
+            
+            # When we have pagination, apply it
+            query = query.offset(offset).limit(max_results)
+            
+            # Execute the query
+            existing_emails = query.all()
 
-            # If we have enough emails in cache, return them
+            # If we have emails in cache, return them
             if len(existing_emails) >= max_results or len(existing_emails) > 0:
                 print(
                     f"Using cached email metadata from database, found {len(existing_emails)} emails"
@@ -84,7 +121,9 @@ def list_messages(
                         "gmail_id": email.gmail_id,
                         "thread_id": email.thread_id,
                         "sender": email.sender,
-                        "recipients": email.recipients if email.recipients else [],
+                        "recipients": (
+                            email.recipients if email.recipients else []
+                        ),
                         "subject": email.subject or "",
                         "snippet": email.snippet or "",
                         "date": email.date.isoformat() if email.date else None,
@@ -92,10 +131,14 @@ def list_messages(
                         "has_attachment": email.has_attachment,
                         "is_read": email.is_read,
                         "created_at": (
-                            email.created_at.isoformat() if email.created_at else None
+                            email.created_at.isoformat()
+                            if email.created_at
+                            else None
                         ),
                         "updated_at": (
-                            email.updated_at.isoformat() if email.updated_at else None
+                            email.updated_at.isoformat()
+                            if email.updated_at
+                            else None
                         ),
                     }
                     for email in existing_emails
@@ -415,13 +458,246 @@ def send_email(
         # Create Gmail API service
         service = get_gmail_service(credentials)
 
+        # If this is a reply, get the original message content to quote
+        quoted_content = ""
+        original_sender = ""
+        original_date = ""
+        original_message_id = None
+        thread_data = None
+        
+        if email_request.thread_id:
+            try:
+                # Get the full thread data for both quoting and threading
+                thread_data = get_thread(email_request.thread_id, user, db)
+                
+                if thread_data and thread_data["messages"]:
+                    # Find the original message to reply to (latest message)
+                    original_message = thread_data["messages"][-1]
+                    
+                    # Extract sender and date from original message for quoting
+                    original_sender = original_message.get("sender", "")
+                    original_date = original_message.get("date", "")
+                    
+                    # Get plain text content for quoting
+                    message_content = original_message.get("body", original_message.get("snippet", ""))
+                    
+                    # Extract the message ID from the latest message
+                    for header in original_message.get("headers", []):
+                        if header["name"].lower() == "message-id":
+                            original_message_id = header["value"]
+                            break
+                    
+                    # Create quoted text in standard email format
+                    if email_request.html:
+                        # Format for HTML emails
+                        quoted_content = f"""
+                        <div class="gmail_quote">
+                        <div>On {original_date}, {original_sender} wrote:</div>
+                        <blockquote class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex">
+                        {message_content}
+                        </blockquote>
+                        </div>
+                        """
+                    else:
+                        # Format for plain text emails
+                        quoted_lines = message_content.split('\n')
+                        quoted_text = '\n'.join([f"> {line}" for line in quoted_lines])
+                        quoted_content = f"\n\nOn {original_date}, {original_sender} wrote:\n{quoted_text}"
+            except Exception as e:
+                print(f"Error getting original message content: {str(e)}")
+                # Continue without quoted content if we can't get it
+
+        # Prepare the email body - combine new content with quoted content
+        body_content = email_request.body
+        if quoted_content and not email_request.suppress_quote:
+            if email_request.html:
+                body_content = f"{body_content}{quoted_content}"
+            else:
+                body_content = f"{body_content}{quoted_content}"
+
+        # CRITICAL CHANGE: For replies, use Gmail's specific reply method instead of sending raw emails
+        if email_request.thread_id:
+            try:
+                # Get the Gmail message details directly
+                original_gmail_message = None
+                original_message_id = None
+                
+                # Try to get the ACTUAL message from Gmail directly
+                try:
+                    # First get the message ID from our database or thread data
+                    message_id_to_reply_to = None
+                    
+                    if thread_data and thread_data["messages"]:
+                        # Get the most recent message that isn't from the current user
+                        for msg in reversed(thread_data["messages"]):
+                            if msg.get("sender") != user.email:
+                                if "gmail_id" in msg:
+                                    message_id_to_reply_to = msg["gmail_id"]
+                                    break
+                        
+                        # If no messages from others found, just use the last message
+                        if not message_id_to_reply_to and thread_data["messages"]:
+                            message_id_to_reply_to = thread_data["messages"][-1].get("gmail_id")
+                            
+                    # Once we have the message ID, get the FULL Gmail message
+                    if message_id_to_reply_to:
+                        # Get full message format to use for reply
+                        original_gmail_message = service.users().messages().get(
+                            userId='me',
+                            id=message_id_to_reply_to,
+                            format='full'
+                        ).execute()
+                        
+                        # Extract the RFC822 Message-ID for proper threading
+                        headers = {h['name']: h['value'] for h in original_gmail_message.get('payload', {}).get('headers', [])}
+                        original_message_id = headers.get('Message-ID')
+                        
+                        print(f"Retrieved original Gmail message: {message_id_to_reply_to}")
+                except Exception as msg_error:
+                    print(f"Error getting original Gmail message: {str(msg_error)}")
+                
+                # ==========================================
+                # APPROACH 1: Use Gmail's reply drafting approach
+                # ==========================================
+                
+                if original_gmail_message:
+                    try:
+                        # Create a modified draft reply
+                        # This uses Gmail's native threading by modifying an existing message
+                        
+                        # Create a draft based on the original message
+                        draft_reply = {
+                            'message': {
+                                'threadId': email_request.thread_id,
+                                'payload': {
+                                    'headers': [
+                                        {'name': 'To', 'value': ', '.join(email_request.to)},
+                                        {'name': 'Subject', 'value': email_request.subject},
+                                        {'name': 'In-Reply-To', 'value': original_message_id},
+                                        {'name': 'References', 'value': original_message_id}
+                                    ],
+                                    'body': {
+                                        'data': base64.urlsafe_b64encode(body_content.encode()).decode()
+                                    }
+                                }
+                            }
+                        }
+                        
+                        # Add CC if provided
+                        if email_request.cc:
+                            draft_reply['message']['payload']['headers'].append(
+                                {'name': 'Cc', 'value': ', '.join(email_request.cc)}
+                            )
+                        
+                        # Try a totally different approach - create a draft then send it
+                        # This forces Gmail to handle the threading
+                        try:
+                            # Create a proper MIME message with ALL required headers
+                            email_mime = MIMEMultipart()
+                            email_mime['From'] = user.email
+                            email_mime['To'] = ', '.join(email_request.to)
+                            email_mime['Subject'] = email_request.subject
+                            
+                            if original_message_id:
+                                email_mime['In-Reply-To'] = original_message_id
+                                email_mime['References'] = original_message_id
+                            
+                            # Add body
+                            if email_request.html:
+                                part = MIMEText(body_content, 'html')
+                            else:
+                                part = MIMEText(body_content, 'plain')
+                                
+                            email_mime.attach(part)
+                            
+                            # Convert to raw and encode
+                            raw_message = base64.urlsafe_b64encode(email_mime.as_bytes()).decode()
+                            
+                            # Send using a different format that forces Gmail to use threading
+                            sent_message = service.users().messages().send(
+                                userId='me',
+                                body={
+                                    'raw': raw_message,
+                                    'threadId': email_request.thread_id
+                                }
+                            ).execute()
+                            
+                            print(f"Sent using Gmail direct approach with explicit threadId")
+                            print(f"Thread ID in response: {sent_message.get('threadId')}")
+                            
+                            return {
+                                "message_id": sent_message.get('id'),
+                                "thread_id": sent_message.get('threadId'),
+                                "success": True
+                            }
+                        except Exception as direct_send_error:
+                            print(f"Error with direct send method: {str(direct_send_error)}")
+                            raise direct_send_error
+                    except Exception as draft_error:
+                        print(f"Error creating draft reply: {str(draft_error)}")
+                
+                # ==========================================
+                # APPROACH 2: Create a reply using completely new method
+                # ==========================================
+                
+                # Create a completely new format with all required headers but use Gmail's JSON format
+                message_json = {
+                    'raw': '',
+                    'threadId': email_request.thread_id
+                }
+                
+                # Create the email in RFC822 format
+                if email_request.html:
+                    mime_subtype = 'html'
+                else:
+                    mime_subtype = 'plain'
+                
+                # Create a message object
+                message = MIMEMultipart()
+                message['to'] = ', '.join(email_request.to)
+                message['from'] = user.email
+                message['subject'] = email_request.subject
+                
+                # Critical: Set reply headers
+                if original_message_id:
+                    message['In-Reply-To'] = original_message_id
+                    message['References'] = original_message_id
+                
+                # Add the body
+                message.attach(MIMEText(body_content, mime_subtype))
+                
+                # Encode as needed by Gmail API
+                raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+                message_json['raw'] = raw
+                
+                # Send the message with explicit threadId
+                sent_message = service.users().messages().send(
+                    userId='me',
+                    body=message_json
+                ).execute()
+                
+                print(f"Sent message using standard method with explicit threadId setting")
+                print(f"Thread ID: {sent_message.get('threadId')}")
+                
+                return {
+                    "message_id": sent_message["id"],
+                    "thread_id": sent_message["threadId"],
+                    "success": True,
+                }
+                
+            except Exception as reply_error:
+                print(f"Error with reply methods: {str(reply_error)}")
+                print("Falling back to standard MIME message method")
+                # Fall back to the standard method if direct API method fails
+        
+        # Standard method for new emails or if direct reply failed
         # Create a proper MIME message
         if email_request.html:
             # Create an HTML email
-            message = MIMEText(email_request.body, "html")
+            message = MIMEText(body_content, "html")
         else:
             # Create a plain text email
-            message = MIMEText(email_request.body, "plain")
+            message = MIMEText(body_content, "plain")
 
         # Set basic headers
         message["to"] = ", ".join(email_request.to)
@@ -437,19 +713,55 @@ def send_email(
 
         # Add threading headers if this is a reply
         if email_request.thread_id:
-            # If in_reply_to is provided, use it, otherwise generate from thread_id
-            message_id = (
-                email_request.in_reply_to
-                or f"<{email_request.thread_id}@mail.gmail.com>"
-            )
-            message["In-Reply-To"] = message_id
-
-            # If references are provided, use them, otherwise use the thread_id
+            # Get the actual message ID from the thread data if possible
+            thread_message_id = original_message_id  # Use the one we already retrieved
+            
+            if not thread_message_id:
+                try:
+                    # Try to get the original message details to get correct Message-ID
+                    if thread_data and thread_data["messages"]:
+                        # First check headers from the message we're directly replying to
+                        latest_message = thread_data["messages"][-1]
+                        for header in latest_message.get("headers", []):
+                            if header["name"].lower() == "message-id":
+                                thread_message_id = header["value"]
+                                break
+                                
+                        # If not found, try the first message in the thread
+                        if not thread_message_id:
+                            first_message = thread_data["messages"][0]
+                            for header in first_message.get("headers", []):
+                                if header["name"].lower() == "message-id":
+                                    thread_message_id = header["value"]
+                                    break
+                except Exception as e:
+                    print(f"Error getting original message ID: {str(e)}")
+                    # Fall back to default ID format if we can't get the real one
+                    
+            # If we couldn't get the real Message-ID, create a properly formatted one
+            if not thread_message_id:
+                thread_message_id = f"<{email_request.thread_id}@mail.gmail.com>"
+                
+            # Set Message-ID for this email - make it unique and correctly formatted
+            unique_id = f"{email_request.thread_id}-{int(time.time())}-{os.urandom(4).hex()}"
+            message["Message-ID"] = f"<reply-{unique_id}@{user.email.split('@')[1]}>"
+            
+            # Set In-Reply-To header to reference the original message
+            message["In-Reply-To"] = thread_message_id
+            
+            # Set References to include both the original message ID and any previous references
+            references = []
             if email_request.references:
-                message["References"] = " ".join(email_request.references)
-            else:
-                message["References"] = message_id
-
+                references.extend(email_request.references)
+            if thread_message_id not in references:
+                references.append(thread_message_id)
+                
+            message["References"] = " ".join(references)
+        
+        # Add Gmail-specific threading header
+        if email_request.thread_id:
+            message["X-GM-THRID"] = email_request.thread_id
+            
         # Encode message properly using base64url encoding
         encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
 
@@ -475,7 +787,6 @@ def send_email(
         # Check if this is a rate limit error
         if "rate limit exceeded" in str(e).lower():
             from app.models.gmail_rate_limit import GmailRateLimit
-            import re
             from dateutil import parser
 
             # Try to extract retry date from error
@@ -563,9 +874,7 @@ def process_email_metadata(message, headers, user_id, db):
 
     # Check if the email already exists in the database
     email = (
-        db.query(Email)
-        .filter(Email.gmail_id == message_id, Email.user_id == user_id)
-        .first()
+        db.query(Email).filter(Email.gmail_id == message_id, Email.user_id == user_id).first()
     )
 
     if not email:
@@ -611,6 +920,7 @@ def search_similar_threads(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     top_k: int = 10,
+    filter_category: Optional[str] = None,
 ):
     """
     Search for email threads similar to the query using semantic search
@@ -620,6 +930,7 @@ def search_similar_threads(
         user: The current user
         db: Database session
         top_k: Number of results to return
+        filter_category: Optional category filter (e.g., "Job Posting" or "Candidate")
 
     Returns:
         List of threads ordered by semantic similarity
@@ -631,7 +942,9 @@ def search_similar_threads(
         query_embedding = create_thread_embedding(query)
 
         # Search vector database
-        results = vector_db.search_threads(user.id, query_embedding, top_k)
+        results = vector_db.search_threads(
+            user.id, query_embedding, top_k, filter_category=filter_category
+        )
 
         # Return search results
         return {"query": query, "results": results, "count": len(results)}
@@ -646,7 +959,8 @@ def search_similar_threads(
 def index_all_threads(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    max_threads: int = 100,
+    max_threads: Optional[int] = None,
+    is_initial_indexing: bool = False,  # Flag to indicate if this is the initial indexing during onboarding
 ):
     """
     Index all threads for a user to enable semantic search
@@ -654,10 +968,42 @@ def index_all_threads(
     This function:
     1. Fetches thread IDs from Gmail
     2. Retrieves full thread data
-    3. Generates embeddings
-    4. Stores in Pinecone
+    3. Classifies each thread
+    4. Generates embeddings
+    5. Stores in Pinecone
+
+    Args:
+        user: The current user
+        db: Database session
+        max_threads: Optional override for max threads to index. If None, uses user's preference.
+        is_initial_indexing: Whether this is the initial indexing (during onboarding) or a regular sync
     """
     try:
+        # Use the user's preference if no explicit max_threads provided
+        if max_threads is None:
+            max_threads = user.max_emails_to_index
+            print(f"Using user's preference of {max_threads} threads")
+
+        # If this is a regular sync, we need to check which threads we already have
+        # to avoid re-indexing them and to ensure we index all new threads
+        existing_thread_ids = set()
+        if not is_initial_indexing:
+            existing_emails = db.query(Email).filter(Email.user_id == user.id).all()
+            existing_thread_ids = {email.thread_id for email in existing_emails if email.thread_id}
+            print(f"Found {len(existing_thread_ids)} existing thread IDs in the database")
+
+        # Log the indexing limit
+        print(f"Indexing up to {max_threads} threads for user {user.email}")
+
+        # If max_threads is 0, don't index anything
+        if max_threads <= 0:
+            return {
+                "success": True,
+                "message": "Email indexing is disabled for this user.",
+                "indexed_count": 0,
+                "total_threads": 0,
+            }
+
         # Get Google credentials
         credentials = get_google_creds(user.id, db)
 
@@ -668,19 +1014,106 @@ def index_all_threads(
         results = (
             service.users()
             .threads()
-            .list(userId="me", maxResults=max_threads)
+            .list(userId="me", maxResults=100)  # Always request more threads to account for filtering
             .execute()
         )
         threads = results.get("threads", [])
 
-        print(f"Found {len(threads)} threads to index")
+        print(f"Found {len(threads)} threads to potentially index")
 
         indexed_count = 0
-        for thread_item in threads:
+        classified_count = 0
+
+        # Check if this is a new user by seeing if they have any emails indexed already
+        existing_email_count = get_email_count(user.id, db)
+        is_new_user = existing_email_count == 0
+
+        if is_new_user:
+            print(
+                f"New user detected. Will classify all {len(threads)} threads (max {max_threads})"
+            )
+        else:
+            print(f"Existing user with {existing_email_count} emails already indexed")
+
+        # Filter threads for processing - for initial indexing, limit to max_threads
+        # For regular sync, process all new threads not already in the database
+        threads_to_process = []
+        
+        if is_initial_indexing:
+            # For initial indexing, limit to max_threads
+            threads_to_process = threads[:max_threads]
+            print(f"Initial indexing: Processing {len(threads_to_process)} threads (limited by max_threads={max_threads})")
+        else:
+            # For regular sync, process all new threads
+            for thread in threads:
+                if thread["id"] not in existing_thread_ids:
+                    threads_to_process.append(thread)
+            print(f"Regular sync: Processing {len(threads_to_process)} new threads")
+
+        for thread_item in threads_to_process:
             thread_id = thread_item["id"]
             try:
-                # Get full thread data
-                thread_data = get_thread(thread_id, user, db, store_embedding=True)
+                # Get thread data
+                thread_data = get_thread(thread_id, user, db)
+
+                # Always classify threads for new users
+                # For existing users, classification happens if email_classifier is available
+                if is_new_user or email_classifier:
+                    try:
+                        print(f"Classifying thread {thread_id}...")
+                        classification_result = asyncio.run(
+                            email_classifier.classify_email(
+                                thread_data=thread_data, user=user, db=db
+                            )
+                        )
+
+                        if classification_result["success"]:
+                            category = classification_result["classification"]
+                            thread_data["category"] = category
+                            print(f"Thread {thread_id} classified as: {category}")
+                            classified_count += 1
+                        else:
+                            print(
+                                f"Failed to classify thread {thread_id}: {classification_result['message']}"
+                            )
+                            # Still try to get category from existing labels as fallback
+                            category = get_thread_category(thread_id, user.id, db)
+                            if category:
+                                thread_data["category"] = category
+                                print(
+                                    f"Thread {thread_id} has existing category: {category}"
+                                )
+                    except Exception as classify_error:
+                        print(
+                            f"Error classifying thread {thread_id}: {str(classify_error)}"
+                        )
+                        # Try to get category from existing labels as fallback
+                        category = get_thread_category(thread_id, user.id, db)
+                        if category:
+                            thread_data["category"] = category
+                            print(
+                                f"Thread {thread_id} has existing category: {category}"
+                            )
+                else:
+                    # For existing users, try to get category from existing labels
+                    category = get_thread_category(thread_id, user.id, db)
+                    if category:
+                        thread_data["category"] = category
+                        print(
+                            f"Using existing category for thread {thread_id}: {category}"
+                        )
+
+                # Process thread for semantic search
+                enhanced_thread = process_thread_for_semantic_search(thread_data)
+
+                # Store in vector database
+                success = vector_db.upsert_thread(user.id, enhanced_thread)
+
+                if success:
+                    print(f"Successfully indexed thread {thread_id} in Pinecone")
+                else:
+                    print(f"Failed to index thread {thread_id} in Pinecone")
+
                 indexed_count += 1
 
                 # Add a delay to avoid rate limiting
@@ -691,7 +1124,9 @@ def index_all_threads(
 
         return {
             "success": True,
+            "message": f"Successfully indexed {indexed_count} threads with {classified_count} classified",
             "indexed_count": indexed_count,
+            "classified_count": classified_count,
             "total_threads": len(threads),
         }
     except Exception as e:
@@ -872,6 +1307,7 @@ def get_response_times_by_time_of_day(user_id: int, db: Session) -> Dict[str, st
     # different times of day (morning, afternoon, evening)
 
     # For simplicity, we'll return mock values
+    # In a real implementation, this would be calculated from the data
     return {"morning": "15 minutes", "afternoon": "28 minutes", "evening": "45 minutes"}
 
 
@@ -928,6 +1364,52 @@ def generate_search_suggestions(user_id: int, query: str, db: Session) -> List[s
     ]
 
 
+def index_thread(
+    thread_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Index a specific thread for semantic search
+
+    Args:
+        thread_id: The ID of the thread to index
+        user: The current user
+        db: Database session
+
+    Returns:
+        Success status
+    """
+    try:
+        # Get thread data
+        thread_data = get_thread(thread_id, user, db)
+
+        # Get thread category from labels if available
+        category = get_thread_category(thread_id, user.id, db)
+        if category:
+            thread_data["category"] = category
+            print(f"Thread {thread_id} has category: {category}")
+
+        # Process thread for semantic search
+        enhanced_thread = process_thread_for_semantic_search(thread_data)
+
+        # Store in vector database
+        success = vector_db.upsert_thread(user.id, enhanced_thread)
+
+        if success:
+            print(f"Successfully indexed thread {thread_id} in Pinecone")
+        else:
+            print(f"Failed to index thread {thread_id} in Pinecone")
+
+        return {"success": success, "thread_id": thread_id}
+    except Exception as e:
+        print(f"Error indexing thread: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error indexing thread: {str(e)}",
+        )
+
+
 # Create a dictionary of all email service functions
 email_service = {
     "get_gmail_service": get_gmail_service,
@@ -955,4 +1437,44 @@ email_service = {
     "parse_search_query": parse_search_query,
     "execute_smart_search": execute_smart_search,
     "generate_search_suggestions": generate_search_suggestions,
+    "index_thread": index_thread,
 }
+
+
+# EmailService class for backward compatibility with code expecting a class-based service
+class EmailService:
+    """
+    A class-based wrapper around email service functions.
+    This provides backward compatibility for code expecting an EmailService class.
+    All methods directly delegate to the corresponding standalone functions.
+    """
+    
+    def __init__(self):
+        pass
+        
+    def get_gmail_service(self, credentials):
+        return get_gmail_service(credentials)
+        
+    def build_gmail_service(self, credentials):
+        return build_gmail_service(credentials)
+    
+    def list_messages(self, user=None, db=None, max_results=20, q=None, label_ids=None, page=1, use_cache=True):
+        return list_messages(user, db, max_results, q, label_ids, page, use_cache)
+    
+    def get_thread(self, thread_id, user=None, db=None, store_embedding=False):
+        return get_thread(thread_id, user, db, store_embedding)
+    
+    def send_email(self, email_request, user=None, db=None):
+        return send_email(email_request, user, db)
+    
+    def process_email_metadata(self, message, headers, user_id, db):
+        return process_email_metadata(message, headers, user_id, db)
+    
+    def search_similar_threads(self, query, user=None, db=None, top_k=10, filter_category=None):
+        return search_similar_threads(query, user, db, top_k, filter_category)
+    
+    def index_all_threads(self, user=None, db=None, max_threads=None, is_initial_indexing=False):
+        return index_all_threads(user, db, max_threads, is_initial_indexing)
+    
+    def index_thread(self, thread_id, user=None, db=None):
+        return index_thread(thread_id, user, db)

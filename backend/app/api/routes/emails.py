@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional
 import logging
@@ -14,6 +15,9 @@ from app.schemas.email import (
 )
 from app.services.email_service import email_service
 from app.services.auth_service import get_current_user
+
+# Set up logger
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/emails", tags=["Emails"])
 
@@ -37,15 +41,30 @@ async def list_emails(
     - **page**: Page number (1-indexed)
     - **use_cache**: Whether to use cached data (set to false to force refresh)
     """
-    return email_service["list_messages"](
-        user=current_user,
-        db=db,
-        max_results=max_results,
-        q=q,
-        label_ids=label_ids,
-        page=page,
-        use_cache=use_cache,
-    )
+    # Check if user is onboarded before processing
+    if not current_user.is_onboarded:
+        # Return empty list for users who haven't completed onboarding
+        # This prevents unnecessary Gmail API calls
+        return []
+
+    try:
+        # Get messages with pagination
+        messages = email_service["list_messages"](
+            user=current_user,
+            db=db,
+            max_results=max_results,
+            q=q,
+            label_ids=label_ids,
+            page=page,
+            use_cache=use_cache,
+        )
+        return messages
+    except Exception as e:
+        logger.error(f"Error getting emails: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error getting emails: {str(e)}",
+        )
 
 
 @router.get("/thread/{thread_id}", response_model=Dict[str, Any])
@@ -74,23 +93,26 @@ async def sync_emails(
     """
     Sync emails from Gmail in the background
 
-    This endpoint will trigger a background job to sync up to max_results emails
+    This endpoint will trigger a background job to sync new emails 
     from Gmail and store their metadata in the database for faster access.
+    It will preserve all previously indexed emails while adding new ones.
 
-    - **max_results**: Maximum number of emails to sync (default: 500)
+    - **max_results**: Maximum number of new emails to check for syncing (default: 500)
     """
-    # Add a background task to sync emails
+    # Add a background task to sync emails using index_all_threads
+    # With is_initial_indexing=False, this will only index new emails
+    # without affecting the previously indexed ones
     background_tasks.add_task(
-        email_service["list_messages"],
+        email_service["index_all_threads"],
         user=current_user,
         db=db,
-        max_results=max_results,
-        use_cache=False,  # Force refresh from Gmail API
+        max_threads=max_results,
+        is_initial_indexing=False,  # Not initial indexing, so it will index new emails without limits
     )
 
     return {
         "status": "Sync started",
-        "message": f"Syncing up to {max_results} emails in the background",
+        "message": f"Syncing new emails in the background (checking up to {max_results} threads)",
     }
 
 
@@ -117,54 +139,63 @@ async def send_email(
 @router.post("/semantic-index", response_model=Dict[str, Any])
 async def index_all_threads_for_search(
     background_tasks: BackgroundTasks,
-    max_threads: int = Query(100, description="Maximum number of threads to index"),
+    max_threads: Optional[int] = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Index all email threads for semantic search.
+    Index all email threads for semantic search and categorize them
 
-    This endpoint will:
-    1. Fetch threads from Gmail
-    2. Process them for semantic search
-    3. Generate embeddings
-    4. Store them in the vector database
+    This endpoint:
+    1. Fetches up to 20 threads for the user (testing limit)
+    2. Classifies each thread into categories (Job Posting, Candidate, Event)
+    3. Processes them for semantic search
+    4. Stores their embeddings in the vector database
 
-    The process runs in the background to avoid timeouts.
+    Note: Currently limited to 20 emails in the testing phase.
     """
-    # Run the indexing process in the background
+    # Start indexing in background to avoid timeout
     background_tasks.add_task(
         email_service["index_all_threads"], user=user, db=db, max_threads=max_threads
     )
 
     return {
         "success": True,
-        "message": f"Indexing up to {max_threads} threads in the background. This may take several minutes.",
+        "message": "Started indexing and categorizing up to 20 threads in the background. This process includes automatic classification of each thread.",
     }
 
 
-@router.get("/semantic-search", response_model=Dict[str, Any])
-async def search_threads_by_semantics(
-    q: str = Query(..., description="Search query text"),
-    top_k: int = Query(10, description="Number of results to return"),
+@router.get("/search", response_model=Dict[str, Any])
+async def search_emails(
+    q: str,
+    top_k: int = 10,
+    filter_category: Optional[str] = None,
+    db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """
-    Search for similar email threads using semantic search.
+    Search for emails using semantic search
 
-    This endpoint provides fuzzy semantic search across email threads, finding conceptually
-    similar content even when keywords don't match exactly. The search is powered by
-    OpenAI embeddings and Pinecone vector database.
+    Args:
+        q: The search query
+        top_k: Number of results to return
+        filter_category: Optional category filter (e.g., "Job Posting" or "Candidate")
+        db: Database session
+        user: The current user
 
-    Parameters:
-    - q: The search query text (e.g., "meeting tomorrow" or "project deadline")
-    - top_k: Number of relevant results to return
-
-    Returns a ranked list of similar threads with relevance scores and their full content.
+    Returns:
+        Search results
     """
-    results = email_service["search_similar_threads"](query=q, user=user, top_k=top_k)
-
-    return results
+    try:
+        results = email_service["search_similar_threads"](
+            query=q, user=user, top_k=top_k, filter_category=filter_category
+        )
+        return results
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error searching emails: {str(e)}",
+        )
 
 
 # When viewing a thread, automatically index it for semantic search
@@ -197,8 +228,23 @@ async def get_emails_by_label(
     user: User = Depends(get_current_user),
 ):
     """
-    Get emails that have been labeled with a specific label
+    Get emails with a specific label
+
+    Args:
+        label_name: The name of the label (e.g., "Job Posting" or "Candidate")
+        page: Page number for pagination
+        max_results: Maximum number of results to return per page
+        db: Database session
+        user: The current user
+
+    Returns:
+        List of emails with the specified label
     """
+    # Check if user is onboarded before processing
+    if not user.is_onboarded:
+        # Return empty list for users who haven't completed onboarding
+        return []
+
     try:
         # Find thread_ids that have this label
         thread_labels = (

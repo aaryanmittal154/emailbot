@@ -1,22 +1,35 @@
 from openai import OpenAI
 import os
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple
 from sqlalchemy.orm import Session
 from fastapi import Depends, HTTPException, status
 from datetime import datetime, timezone, timedelta
 import re
 from dateutil import parser
 import logging
+import uuid
+import json
+import base64
+import requests
 
 from app.db.database import get_db
 from app.models.user import User
 from app.models.gmail_rate_limit import GmailRateLimit
-from app.services.email_service import email_service
+
+# IMPORTANT: Do not import from app.api.routes.auto_reply here to avoid circular imports
+# Use runtime imports where needed inside each function instead
+
+# Import specific functions needed from email_service
+from app.services.email_service import get_thread, get_gmail_service, send_email
 from app.services.auth_service import get_current_user, get_google_creds
 from app.services.embedding_service import create_thread_embedding
 from app.services.vector_db_service import vector_db
 from app.services.email_classifier_service import email_classifier
 from app.schemas.email import SendEmailRequest
+from app.services.match_service import match_service
+from app.db.database import SessionLocal
+from app.utils.thread_utils import get_thread_category
+from app.core.config import settings
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -33,6 +46,9 @@ logger = logging.getLogger(__name__)
 
 class AutoReplyManager:
     """Manages automated email replies using RAG"""
+    
+    # Cache to track message IDs that have already been processed to avoid duplicate replies
+    processed_message_ids = set()
 
     @staticmethod
     async def check_and_process_new_emails(
@@ -42,14 +58,16 @@ class AutoReplyManager:
         use_html: bool = False,
     ) -> Dict[str, Any]:
         """
-        Check for new emails and process them for auto-reply
+        Check for new unread emails and generate auto-replies
 
-        This function:
-        1. Gets recent unread emails
-        2. For each thread, checks if it needs a reply
-        3. If so, generates and sends an appropriate response
+        Args:
+            user: The current user
+            db: Database session
+            max_results: Maximum number of emails to process
+            use_html: Whether to use HTML formatting for emails
 
-        Returns a summary of actions taken
+        Returns:
+            Dictionary with processing results
         """
         try:
             # First check if user has an active rate limit
@@ -72,8 +90,8 @@ class AutoReplyManager:
             # Get Google credentials
             credentials = get_google_creds(user.id, db)
 
-            # Create Gmail API service
-            service = email_service["get_gmail_service"](credentials)
+            # Use the imported function directly
+            service = get_gmail_service(credentials)
 
             # Query for recent unread emails
             # Use a Gmail query for unread emails
@@ -93,10 +111,12 @@ class AutoReplyManager:
             # Track the threads we've processed to avoid duplicates
             processed_threads = set()
 
-            # Process each message
-            for message_data in messages:
-                message_id = message_data["id"]
-                thread_id = message_data.get("threadId")
+            for msg in messages:
+                if rate_limit_info:
+                    # We've hit a rate limit, stop processing
+                    break
+
+                thread_id = msg["threadId"]
 
                 # Skip if we've already processed this thread
                 if thread_id in processed_threads:
@@ -106,184 +126,76 @@ class AutoReplyManager:
 
                 try:
                     # Get full thread data
-                    thread = email_service["get_thread"](
-                        thread_id=thread_id, user=user, db=db
-                    )
+                    thread = get_thread(thread_id=thread_id, user=user, db=db)
 
-                    # Classify the email and apply the appropriate label
-                    classification_result = await email_classifier.classify_email(
-                        thread_data=thread, user=user, db=db
-                    )
-
-                    if classification_result["success"]:
-                        logger.info(
-                            f"Email classified as '{classification_result['classification']}' "
-                            f"with {classification_result['confidence']}% confidence"
-                        )
-                        # Log the extracted fields
-                        logger.info(
-                            f"Extracted fields: {classification_result['fields']}"
-                        )
-                    else:
-                        logger.warning(
-                            f"Failed to classify email: {classification_result['message']}"
-                        )
-
-                    # Index this thread in Pinecone regardless of whether we reply to it
-                    try:
-                        print(
-                            f"Automatically indexing newly discovered thread {thread_id}"
-                        )
-                        # Fetch the thread again with store_embedding=True to index it
-                        email_service["get_thread"](
-                            thread_id=thread_id,
-                            user=user,
-                            db=db,
-                            store_embedding=True,  # This will store it in Pinecone
-                        )
-                        print(f"Successfully indexed thread {thread_id} in Pinecone")
-                    except Exception as index_error:
-                        print(
-                            f"Error automatically indexing thread {thread_id}: {str(index_error)}"
-                        )
-
-                    # Check if the thread needs a reply (most recent message is unread and not sent by user)
-                    if thread["messages"] and len(thread["messages"]) > 0:
-                        latest_message = thread["messages"][
-                            -1
-                        ]  # Last message in thread
-
-                        # Only process if:
-                        # 1. Message is unread
-                        # 2. User is not the sender (don't reply to own emails)
-                        # 3. No previous reply in thread from the user
-                        if (
-                            not latest_message["is_read"]
-                            and latest_message["sender"] != user.email
-                            and not AutoReplyManager._user_already_replied(
-                                thread["messages"], user.email
-                            )
-                        ):
-
-                            # Generate and send reply
-                            reply_sent, rate_limit = (
-                                await AutoReplyManager.generate_and_send_reply(
-                                    thread=thread,
-                                    user=user,
-                                    db=db,
-                                    use_html=use_html,
-                                    classification=classification_result[
-                                        "classification"
-                                    ],
-                                )
-                            )
-
-                            if reply_sent:
-                                replied_count += 1
-
-                            # If we hit a rate limit, stop processing and return
-                            if rate_limit:
-                                rate_limit_info = rate_limit
-                                break
-
+                    # Only process threads with a message in the last hour
+                    latest_message = thread["messages"][-1]
+                    latest_time = parser.parse(latest_message["date"])
                     processed_count += 1
 
-                except Exception as e:
-                    error_msg = str(e)
-                    errors.append({"thread_id": thread_id, "error": error_msg})
-
-                    # Check for rate limit errors
-                    if (
-                        "429" in error_msg
-                        and "rate limit exceeded" in error_msg.lower()
+                    # Check if we should process this email further
+                    if latest_time.replace(
+                        tzinfo=timezone.utc
+                    ) > time_threshold and not AutoReplyManager._user_already_replied(
+                        thread["messages"], user.email
                     ):
-                        date_match = re.search(
-                            r"Retry after ([0-9\-T:\.Z]+)", error_msg
+                        # Classify the email content
+                        classification_result = await email_classifier.classify_email(
+                            thread, user, db
                         )
-                        if date_match:
-                            retry_after_str = date_match.group(1)
-                            try:
-                                retry_after = parser.parse(retry_after_str)
-                                # Store the rate limit in the database
-                                GmailRateLimit.add_limit(db, user.id, retry_after)
+                        classification = classification_result["classification"]
 
-                                rate_limit_info = {
-                                    "status": "rate_limited",
-                                    "retry_after": retry_after_str,
-                                }
-                            except Exception as parse_error:
-                                print(f"Error parsing retry date: {parse_error}")
-                                rate_limit_info = {
-                                    "status": "rate_limited",
-                                    "retry_after": "unknown",
-                                }
-                        else:
-                            rate_limit_info = {
-                                "status": "rate_limited",
-                                "retry_after": "unknown",
-                            }
+                        # Generate and send a reply
+                        reply_sent, response = (
+                            await AutoReplyManager.generate_and_send_reply(
+                                thread, user, db, use_html, classification
+                            )
+                        )
 
-                        # Stop processing more threads if we hit a rate limit
-                        break
+                        if reply_sent:
+                            replied_count += 1
+                        elif (
+                            response
+                            and "status" in response
+                            and response["status"] == "rate_limited"
+                        ):
+                            rate_limit_info = response
 
-                    print(f"Error processing thread {thread_id}: {error_msg}")
+                        # Fetch the thread again and update it in vector storage
+                        updated_thread = get_thread(
+                            thread_id=thread_id, user=user, db=db, store_embedding=True
+                        )
+
+                except Exception as thread_error:
+                    print(f"Error processing thread {thread_id}: {str(thread_error)}")
+                    errors.append(
+                        {
+                            "thread_id": thread_id,
+                            "error": str(thread_error),
+                            "type": type(thread_error).__name__,
+                        }
+                    )
                     continue
 
-            response = {
+            # Prepare the details dictionary if needed
+            details = {}
+            if errors:
+                details["errors"] = errors
+
+            if rate_limit_info:
+                details["rate_limit"] = rate_limit_info
+
+            return {
                 "success": True,
                 "processed_count": processed_count,
                 "replied_count": replied_count,
                 "message": f"Processed {processed_count} threads, sent {replied_count} auto-replies",
+                "details": details if details else None,
             }
 
-            # Add details about errors if there were any
-            if errors:
-                response["details"] = {
-                    "errors": errors[:5],  # Limit number of errors returned
-                    "error_count": len(errors),
-                }
-
-            if rate_limit_info:
-                if "details" not in response:
-                    response["details"] = {}
-                response["details"]["rate_limit"] = rate_limit_info
-                response["message"] += f". Note: Gmail sending rate limit reached."
-
-            return response
-
         except Exception as e:
-            print(f"Error in check_and_process_new_emails: {str(e)}")
             error_msg = str(e)
-            details = {"error": error_msg}
-
-            # Check for rate limit errors in the top-level exception too
-            if "429" in error_msg and "rate limit exceeded" in error_msg.lower():
-                import re
-
-                date_match = re.search(r"Retry after ([0-9\-T:\.Z]+)", error_msg)
-                if date_match:
-                    retry_after_str = date_match.group(1)
-                    try:
-                        retry_after = parser.parse(retry_after_str)
-                        # Store the rate limit in the database
-                        GmailRateLimit.add_limit(db, user.id, retry_after)
-
-                        details["rate_limit"] = {
-                            "status": "rate_limited",
-                            "retry_after": retry_after_str,
-                        }
-                    except Exception as parse_error:
-                        print(f"Error parsing retry date: {parse_error}")
-                        details["rate_limit"] = {
-                            "status": "rate_limited",
-                            "retry_after": "unknown",
-                        }
-                else:
-                    details["rate_limit"] = {
-                        "status": "rate_limited",
-                        "retry_after": "unknown",
-                    }
-
+            print(f"Error processing emails: {error_msg}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error processing emails: {error_msg}",
@@ -310,7 +222,7 @@ class AutoReplyManager:
         db: Session,
         use_html: bool = False,
         classification: str = "General",
-    ) -> tuple[bool, Dict]:
+    ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Generate and send an appropriate reply using RAG"""
         try:
             # First check if user has an active rate limit
@@ -341,15 +253,53 @@ class AutoReplyManager:
 
             print("Created embedding for the latest message")
 
-            # Find similar threads in vector database
+            # Find similar threads in vector database with category filtering
             print(f"Searching for similar threads in vector DB for user ID: {user.id}")
-            similar_threads = vector_db.search_threads(
-                user.id, query_embedding, MAX_CONTEXT_THREADS
-            )
+
+            # For job postings, find candidate threads; for candidates, find job postings
+            complementary_category = None
+            if classification == "Job Posting":
+                complementary_category = "Candidate"
+                print(f"This is a job posting, searching for matching candidates")
+            elif classification == "Candidate":
+                complementary_category = "Job Posting"
+                print(f"This is a candidate, searching for matching job postings")
+            else:
+                print(
+                    f"Non job/candidate email ({classification}), using general search"
+                )
+
+            # First try with category filtering
+            try:
+                similar_threads = vector_db.search_threads(
+                    user.id,
+                    query_embedding,
+                    MAX_CONTEXT_THREADS,
+                    filter_category=complementary_category,
+                )
+
+                # If no matching threads found with category filter, fall back to general search
+                if len(similar_threads) == 0 and complementary_category:
+                    print(
+                        f"No {complementary_category.lower()} threads found, falling back to general search"
+                    )
+                    similar_threads = vector_db.search_threads(
+                        user.id, query_embedding, MAX_CONTEXT_THREADS
+                    )
+            except Exception as search_error:
+                print(
+                    f"Error during vector search: {str(search_error)}, falling back to general search"
+                )
+                # Fall back to general search without filtering
+                similar_threads = vector_db.search_threads(
+                    user.id, query_embedding, MAX_CONTEXT_THREADS
+                )
 
             print(f"Found {len(similar_threads)} similar threads")
             for i, st in enumerate(similar_threads):
                 print(f"Similar thread {i+1}: {st.get('subject', 'No Subject')}")
+                if "category" in st:
+                    print(f"  Category: {st.get('category', 'Unknown')}")
 
             # Format the context from similar threads
             context = AutoReplyManager._format_context_from_threads(similar_threads)
@@ -388,43 +338,24 @@ class AutoReplyManager:
                     html=use_html,  # Use HTML formatting based on parameter
                 )
 
-                # Send the email using the existing email service
-                print("============= SENDING AUTO-REPLY EMAIL =============")
-                print(f"To: {email_request.to}")
-                print(f"Subject: {email_request.subject}")
-                print(f"Thread ID: {email_request.thread_id}")
-                print(f"HTML Format: {email_request.html}")
-                print(f"CC Recipients: {email_request.cc}")
-                print("===================================================")
-
-                response = email_service["send_email"](
-                    email_request=email_request,
-                    user=user,
-                    db=db,
-                )
+                # Call the function directly
+                response = send_email(email_request=email_request, user=user, db=db)
 
                 print(f"Auto-reply sent successfully for thread {thread['thread_id']}")
                 print(f"Response: {response}")
 
-                # Index the updated thread (including our reply) in Pinecone
-                try:
-                    print(
-                        f"Indexing thread {thread['thread_id']} after sending auto-reply"
-                    )
-                    # Get updated thread that includes our reply
-                    updated_thread = email_service["get_thread"](
-                        thread_id=thread["thread_id"],
-                        user=user,
-                        db=db,
-                        store_embedding=True,  # This will store it in Pinecone
-                    )
-                    print(
-                        f"Successfully indexed thread {thread['thread_id']} in Pinecone"
-                    )
-                except Exception as index_error:
-                    print(f"Error indexing thread after auto-reply: {str(index_error)}")
+                # Re-index the thread after sending the reply
+                print(f"Indexing thread {thread['thread_id']} after sending auto-reply")
 
-                return True, None
+                # Call the function directly
+                updated_thread = get_thread(
+                    thread_id=thread["thread_id"],
+                    user=user,
+                    db=db,
+                    store_embedding=True,
+                )
+
+                return True, response
 
             except Exception as send_error:
                 # Check specifically for rate limit errors
@@ -486,6 +417,11 @@ class AutoReplyManager:
             context += f"--- SIMILAR THREAD {i+1} ---\n"
             context += f"Subject: {thread.get('subject', 'No Subject')}\n"
 
+            # Include category if available
+            category = thread.get("category", "")
+            if category:
+                context += f"Category: {category}\n"
+
             # Include thread content
             context += f"Content: {thread.get('text_preview', '')}\n\n"
 
@@ -530,6 +466,85 @@ DO NOT:
 - Include salutations like "Dear" or signatures like "Best regards" - these will be added separately
 - Leave ANY template placeholders like [Name] or [Company] in your response
 """
+
+            # For job postings and candidate emails, let's use our matching service to find the best matches
+            if classification == "Job Posting" or classification == "Candidate":
+                # Check if we need to find matching candidates or jobs
+                db = SessionLocal()
+                try:
+                    # Get the user record from the database
+                    user = db.query(User).filter(User.email == user_email).first()
+
+                    if user:
+                        # Find matches based on classification
+                        if classification == "Job Posting":
+                            # Find matching candidates for this job posting
+                            match_results = (
+                                await match_service.find_matching_candidates(
+                                    job_thread_id=thread["thread_id"],
+                                    user=user,
+                                    db=db,
+                                    top_k=3,
+                                )
+                            )
+
+                            # Add match results to the context
+                            if match_results and match_results.get("candidates"):
+                                context += "\n\nMATCHING CANDIDATES:\n"
+                                for idx, candidate in enumerate(
+                                    match_results["candidates"]
+                                ):
+                                    context += (
+                                        f"\nCandidate {idx+1}: {candidate['subject']}\n"
+                                    )
+                                    context += f"Similarity Score: {candidate['similarity_score']:.2f}\n"
+                                    # Extract candidate info from the candidate thread
+                                    candidate_thread = candidate.get(
+                                        "candidate_thread", {}
+                                    )
+                                    if candidate_thread and candidate_thread.get(
+                                        "messages"
+                                    ):
+                                        candidate_content = ""
+                                        for msg in candidate_thread["messages"]:
+                                            candidate_content += (
+                                                msg.get("body", msg.get("snippet", ""))
+                                                + "\n"
+                                            )
+                                        context += (
+                                            f"Details: {candidate_content[:500]}...\n"
+                                        )
+
+                        elif classification == "Candidate":
+                            # Find matching jobs for this candidate
+                            match_results = await match_service.find_matching_jobs(
+                                candidate_thread_id=thread["thread_id"],
+                                user=user,
+                                db=db,
+                                top_k=3,
+                            )
+
+                            # Add match results to the context
+                            if match_results and match_results.get("jobs"):
+                                context += "\n\nMATCHING JOB POSTINGS:\n"
+                                for idx, job in enumerate(match_results["jobs"]):
+                                    context += f"\nJob {idx+1}: {job['subject']}\n"
+                                    context += f"Similarity Score: {job['similarity_score']:.2f}\n"
+                                    # Extract job info from the job thread
+                                    job_thread = job.get("job_thread", {})
+                                    if job_thread and job_thread.get("messages"):
+                                        job_content = ""
+                                        for msg in job_thread["messages"]:
+                                            job_content += (
+                                                msg.get("body", msg.get("snippet", ""))
+                                                + "\n"
+                                            )
+                                        context += f"Details: {job_content[:500]}...\n"
+
+                except Exception as match_error:
+                    print(f"Error finding matches: {str(match_error)}")
+                finally:
+                    db.close()
 
             # Customize system prompt based on classification
             if classification == "Job Posting":
@@ -685,3 +700,484 @@ Based on this information, draft a helpful and appropriate reply. Remember to AL
         except Exception as e:
             print(f"Error generating reply: {str(e)}")
             return None
+
+    @staticmethod
+    async def set_up_gmail_push_notifications(
+        user: User, db: Session
+    ) -> Dict[str, Any]:
+        """
+        Set up Gmail push notifications for real-time email processing.
+
+        This registers a webhook with Gmail API to receive notifications when new emails arrive.
+
+        Args:
+            user: The user to set up notifications for
+            db: Database session
+
+        Returns:
+            Dict with setup results
+        """
+        try:
+            # Get credentials and build service
+            credentials = get_google_creds(user.id, db)
+            service = get_gmail_service(credentials)
+
+            # Create a unique topic name for this user
+            topic_name = f"projects/{settings.google_cloud_project}/topics/gmail-notifications-{user.id}"
+
+            # Set up the webhook
+            webhook_url = (
+                f"{settings.base_url}/api/auto-reply/receive-gmail-push-notification"
+            )
+
+            # Register the webhook for push notifications
+            # Note: The push notification requires a Google Cloud Pub/Sub topic
+            # that must be set up in the Google Cloud Console
+            request = {
+                "labelIds": ["INBOX"],
+                "topicName": topic_name,
+                "labelFilterBehavior": "INCLUDE",
+            }
+
+            # Call the Gmail API to watch for changes
+            watch_response = service.users().watch(userId="me", body=request).execute()
+
+            # Store the watch details for this user
+            expiration = (
+                int(watch_response.get("expiration", 0)) / 1000
+            )  # Convert to seconds
+            expiration_date = datetime.fromtimestamp(expiration, timezone.utc)
+            history_id = watch_response.get("historyId")
+
+            logger.info(
+                f"Gmail push notifications set up for user {user.id}. Expires: {expiration_date}"
+            )
+
+            return {
+                "success": True,
+                "message": "Gmail push notifications set up successfully",
+                "details": {
+                    "expiration": expiration_date.isoformat(),
+                    "historyId": history_id,
+                },
+            }
+
+        except Exception as e:
+            logger.error(f"Error setting up Gmail push notifications: {str(e)}")
+            return {
+                "success": False,
+                "message": f"Failed to set up Gmail push notifications: {str(e)}",
+            }
+
+    @staticmethod
+    async def process_gmail_push_notification(
+        user: User, db: Session, notification_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Process a Gmail push notification and trigger immediate auto-reply.
+
+        Args:
+            user: The current user
+            db: Database session
+            notification_data: The notification data from Gmail
+
+        Returns:
+            Dictionary with processing results
+        """
+        try:
+            logger.info(f"Processing Gmail push notification for user {user.id}")
+
+            # Extract message info from the notification
+            if "message" not in notification_data:
+                logger.error("No message data in notification")
+                return {
+                    "success": False,
+                    "message": "No message data in notification",
+                }
+
+            # Extract message ID from notification
+            message_info = notification_data.get("message", {})
+            message_id = message_info.get("data", {}).get("emailMessageId")
+
+            if not message_id:
+                logger.error("No message ID in notification")
+                return {
+                    "success": False,
+                    "message": "No message ID in notification",
+                }
+
+            # Check if this notification is for a new email
+            history_id = message_info.get("data", {}).get("historyId")
+            if not history_id:
+                logger.error("No history ID in notification")
+                return {
+                    "success": False,
+                    "message": "No history ID in notification",
+                }
+
+            # First check if user has an active rate limit
+            active_limit = GmailRateLimit.get_active_limit(db, user.id)
+            if active_limit:
+                logger.warning(f"Gmail rate limit in effect for user {user.id}")
+                return {
+                    "success": False,
+                    "message": "Gmail sending rate limit in effect",
+                    "details": {
+                        "rate_limit": {
+                            "status": "rate_limited",
+                            "retry_after": active_limit.retry_after.isoformat(),
+                        }
+                    },
+                }
+
+            # Get Google credentials
+            credentials = get_google_creds(user.id, db)
+
+            # Get Gmail service
+            service = get_gmail_service(credentials)
+
+            # Get the thread ID for this message
+            message = (
+                service.users().messages().get(userId="me", id=message_id).execute()
+            )
+            thread_id = message.get("threadId")
+
+            if not thread_id:
+                logger.error(f"No thread ID found for message {message_id}")
+                return {
+                    "success": False,
+                    "message": f"No thread ID found for message {message_id}",
+                }
+
+            # Get full thread data
+            thread = get_thread(thread_id=thread_id, user=user, db=db)
+
+            # Check if the message is unread and recent
+            time_threshold = datetime.now(timezone.utc) - NEW_EMAIL_THRESHOLD
+
+            # Get the latest message in the thread
+            latest_message = thread["messages"][-1]
+            latest_time = parser.parse(latest_message["date"])
+
+            # Check if the email is recent and we haven't replied yet
+            if latest_time.replace(
+                tzinfo=timezone.utc
+            ) > time_threshold and not AutoReplyManager._user_already_replied(
+                thread["messages"], user.email
+            ):
+                logger.info(f"Processing new email in thread {thread_id}")
+
+                # Classify the email content
+                classification_result = await email_classifier.classify_email(
+                    thread, user, db
+                )
+                classification = classification_result["classification"]
+
+                # Generate and send a reply
+                reply_sent, response = await AutoReplyManager.generate_and_send_reply(
+                    thread, user, db, use_html=False, classification=classification
+                )
+
+                if reply_sent:
+                    logger.info(f"Auto-reply sent for thread {thread_id}")
+                    return {
+                        "success": True,
+                        "message": "Auto-reply sent successfully",
+                        "thread_id": thread_id,
+                    }
+                elif (
+                    response
+                    and "status" in response
+                    and response["status"] == "rate_limited"
+                ):
+                    logger.warning(
+                        f"Rate limit hit while sending auto-reply for thread {thread_id}"
+                    )
+                    return {
+                        "success": False,
+                        "message": "Gmail sending rate limit reached",
+                        "details": response,
+                    }
+                else:
+                    logger.warning(f"Failed to send auto-reply for thread {thread_id}")
+                    return {
+                        "success": False,
+                        "message": "Failed to send auto-reply",
+                        "details": response,
+                    }
+            else:
+                logger.info(f"Email in thread {thread_id} does not need an auto-reply")
+                return {
+                    "success": True,
+                    "message": "Email does not need an auto-reply",
+                    "thread_id": thread_id,
+                }
+
+        except Exception as e:
+            logger.error(f"Error processing Gmail push notification: {str(e)}")
+            raise Exception(f"Error processing Gmail push notification: {str(e)}")
+
+    @staticmethod
+    async def process_history_updates(
+        user: User,
+        db: Session,
+        history_id: str,
+        time_threshold: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """
+        Process Gmail history updates since a specific history ID.
+        
+        This method is designed to work with Gmail push notifications to process
+        all changes that have happened since the last known history ID.
+        
+        Args:
+            user: The user who received the emails
+            db: Database session
+            history_id: The Gmail history ID to start from
+            time_threshold: Only process emails newer than this time
+            
+        Returns:
+            Dictionary with processing results
+        """
+        try:
+            # Set default time threshold if not provided (last hour)
+            if time_threshold is None:
+                time_threshold = datetime.now(timezone.utc) - NEW_EMAIL_THRESHOLD
+                
+            logger.info(f"Processing Gmail history updates since ID {history_id} for user {user.id}")
+            
+            # First check if user has an active rate limit
+            active_limit = GmailRateLimit.get_active_limit(db, user.id)
+            if active_limit:
+                logger.warning(f"Gmail rate limit in effect for user {user.id}")
+                return {
+                    "success": False,
+                    "message": "Gmail sending rate limit in effect",
+                    "details": {
+                        "rate_limit": {
+                            "status": "rate_limited",
+                            "retry_after": active_limit.retry_after.isoformat(),
+                        }
+                    },
+                }
+                
+            # Get Google credentials
+            credentials = get_google_creds(user.id, db)
+            service = get_gmail_service(credentials)
+            
+            # Get history updates from Gmail API
+            try:
+                history_results = service.users().history().list(
+                    userId="me",
+                    startHistoryId=history_id,
+                    historyTypes=["messageAdded", "labelAdded"],  # Only care about new messages and label changes
+                ).execute()
+                
+                history_changes = history_results.get("history", [])
+                logger.info(f"Found {len(history_changes)} history changes for user {user.id}")
+                
+                # Track results
+                processed_count = 0
+                replied_count = 0
+                
+                # Process each history change
+                for change in history_changes:
+                    # Look for added messages
+                    for message_added in change.get("messagesAdded", []):
+                        message = message_added.get("message", {})
+                        message_id = message.get("id")
+                        
+                        if message_id and "INBOX" in message.get("labelIds", []) and "UNREAD" in message.get("labelIds", []):
+                            # Process this new unread email
+                            logger.info(f"Processing new message {message_id} from history")
+                            processed_count += 1
+                            
+                            result = await AutoReplyManager.process_single_email(
+                                user=user,
+                                db=db,
+                                email_id=message_id,
+                                use_html=False
+                            )
+                            
+                            if result.get("success") and "Auto-reply sent successfully" in result.get("message", ""):
+                                replied_count += 1
+                
+                # Get the latest history ID for future queries
+                new_history_id = history_results.get("historyId")
+                if new_history_id:
+                    # Update the stored history ID - using runtime import to avoid circular imports
+                    from app.api.routes.auto_reply import get_auto_reply_config
+                    config = get_auto_reply_config(user.id, db)
+                    config.push_notification_history_id = new_history_id
+                    db.commit()
+                    
+                logger.info(f"Processed {processed_count} emails, sent {replied_count} replies for user {user.id}")
+                
+                # Update global statistics - using runtime import to avoid circular imports
+                if replied_count > 0:
+                    from app.services.background_tasks import update_user_check_stats
+                    update_user_check_stats(user.id, replied_count)
+                    
+                return {
+                    "success": True,
+                    "message": f"Processed {processed_count} emails, sent {replied_count} replies",
+                    "processed_count": processed_count,
+                    "replied_count": replied_count, 
+                    "latest_history_id": new_history_id
+                }
+                
+            except Exception as gmail_error:
+                logger.error(f"Gmail API error while getting history: {str(gmail_error)}")
+                return {
+                    "success": False,
+                    "message": f"Gmail API error: {str(gmail_error)}",
+                }
+                
+        except Exception as e:
+            logger.error(f"Error processing history updates: {str(e)}")
+            return {
+                "success": False,
+                "message": f"Error processing history updates: {str(e)}",
+            }
+    
+    @staticmethod
+    async def process_single_email(
+        user: User,
+        db: Session,
+        email_id: str,
+        use_html: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Process a single email for auto-reply.
+
+        This method is optimized for instant processing of newly arrived emails.
+        It reuses the core logic from check_and_process_new_emails for consistency.
+
+        Args:
+            user: The user who received the email
+            db: Database session
+            email_id: The Gmail message ID
+            use_html: Whether to use HTML in the reply
+
+        Returns:
+            Dictionary with processing results
+        """
+        try:
+            # First check if user has an active rate limit
+            active_limit = GmailRateLimit.get_active_limit(db, user.id)
+            if active_limit:
+                print(f"Gmail rate limit in effect for user {user.id}")
+                return {
+                    "success": False,
+                    "message": "Gmail sending rate limit in effect",
+                    "details": {
+                        "rate_limit": {
+                            "status": "rate_limited",
+                            "retry_after": active_limit.retry_after.isoformat(),
+                        }
+                    },
+                }
+
+            # Set the time threshold for new emails (last hour)
+            time_threshold = datetime.now(timezone.utc) - NEW_EMAIL_THRESHOLD
+
+            # Get Google credentials
+            credentials = get_google_creds(user.id, db)
+
+            # Use the imported function directly
+            service = get_gmail_service(credentials)
+
+            # Get the message details to find the thread ID
+            try:
+                message = (
+                    service.users().messages().get(userId="me", id=email_id).execute()
+                )
+            except Exception as e:
+                print(f"Error getting message {email_id}: {str(e)}")
+                return {
+                    "success": False,
+                    "message": f"Error getting message: {str(e)}",
+                }
+
+            thread_id = message.get("threadId")
+            if not thread_id:
+                print(f"No thread ID found for message {email_id}")
+                return {
+                    "success": False,
+                    "message": "No thread ID found for message",
+                }
+
+            # Get the full thread data
+            thread = get_thread(thread_id=thread_id, user=user, db=db)
+
+            # Only process if the latest message is recent and we haven't replied
+            latest_message = thread["messages"][-1]
+            latest_time = parser.parse(latest_message["date"])
+            
+            # Check if we've already processed this message
+            if email_id in AutoReplyManager.processed_message_ids:
+                print(f"Skipping already processed email {email_id}")
+                return {
+                    "success": True,
+                    "message": "Email already processed",
+                }
+
+            # Skip processing if:
+            # 1. Email is older than our threshold
+            # 2. User has already replied to this thread
+            if latest_time.replace(
+                tzinfo=timezone.utc
+            ) <= time_threshold or AutoReplyManager._user_already_replied(
+                thread["messages"], user.email
+            ):
+                print(f"Skipping email {email_id}: too old or already replied")
+                return {
+                    "success": True,
+                    "message": "Email skipped (too old or already replied)",
+                }
+
+            # Classify the email content
+            classification_result = await email_classifier.classify_email(
+                thread, user, db
+            )
+            classification = classification_result["classification"]
+
+            # Generate and send a reply
+            reply_sent, response = await AutoReplyManager.generate_and_send_reply(
+                thread, user, db, use_html, classification
+            )
+
+            if reply_sent:
+                # Mark this message as processed to avoid duplicate replies
+                AutoReplyManager.processed_message_ids.add(email_id)
+                print(f"Auto-reply sent for email {email_id}")
+                return {
+                    "success": True,
+                    "message": "Auto-reply sent successfully",
+                    "thread_id": thread_id,
+                }
+            elif (
+                response
+                and "status" in response
+                and response["status"] == "rate_limited"
+            ):
+                print(f"Rate limit hit while sending auto-reply for email {email_id}")
+                return {
+                    "success": False,
+                    "message": "Gmail sending rate limit reached",
+                    "details": response,
+                }
+            else:
+                print(f"Failed to send auto-reply for email {email_id}")
+                return {
+                    "success": False,
+                    "message": "Failed to send auto-reply",
+                    "details": response,
+                }
+
+        except Exception as e:
+            print(f"Error processing email {email_id}: {str(e)}")
+            return {
+                "success": False,
+                "message": f"Error processing email: {str(e)}",
+            }

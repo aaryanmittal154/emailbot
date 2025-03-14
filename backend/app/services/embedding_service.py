@@ -20,90 +20,157 @@ def get_token_count(text: str) -> int:
     return len(encoding.encode(text))
 
 
+class EmbeddingService:
+    """Service for generating and managing embeddings"""
+    
+    def __init__(self):
+        """Initialize the embedding service"""
+        self.client = client
+        self.model_name = EMBEDDING_MODEL
+        self.encoding_name = EMBEDDING_ENCODING
+        self.dimensions = EMBEDDING_DIMENSIONS
+        self.max_tokens = MAX_TOKENS
+    
+    def get_token_count(self, text: str) -> int:
+        """Count the number of tokens in a text string"""
+        encoding = tiktoken.get_encoding(self.encoding_name)
+        return len(encoding.encode(text))
+    
+    def format_thread_for_embedding(self, thread: Dict[str, Any]) -> str:
+        """
+        Format an email thread into a structured text for embedding.
+        Creates a context that represents the full conversation thread.
+        Preserves as much of the original email content as possible within token limits.
+        """
+        formatted_text = f"Thread Subject: {thread.get('subject', '(No Subject)')}\n\n"
+
+        # Add participants
+        participants = thread.get("participants", [])
+        if participants:
+            formatted_text += "Participants: " + ", ".join(participants) + "\n\n"
+
+        # Add messages in chronological order
+        messages = thread.get("messages", [])
+        for i, message in enumerate(messages):
+            # Format date
+            date = message.get("date", "")
+            if date:
+                try:
+                    # Convert ISO string to datetime for better formatting
+                    date_obj = datetime.fromisoformat(date.replace("Z", "+00:00"))
+                    formatted_date = date_obj.strftime("%Y-%m-%d %H:%M:%S")
+                except:
+                    formatted_date = date
+            else:
+                formatted_date = "(no date)"
+
+            # Add message details
+            formatted_text += f"--- Message {i+1} ---\n"
+            formatted_text += f"From: {message.get('sender', '(unknown)')}\n"
+            formatted_text += f"Date: {formatted_date}\n"
+            
+            # Add recipients if available
+            recipients = message.get("recipients", [])
+            if recipients:
+                formatted_text += "To: " + ", ".join(recipients) + "\n"
+                
+            # Add message body
+            body = message.get("body", "").strip()
+            if body:
+                formatted_text += f"Content:\n{body}\n\n"
+            else:
+                formatted_text += "Content: (empty)\n\n"
+
+        # Check token count and truncate if necessary
+        token_count = self.get_token_count(formatted_text)
+        if token_count > self.max_tokens:
+            # Truncate text to fit within token limit
+            # This is a simple approach; a more sophisticated approach would be to
+            # preserve the most important parts (e.g., keep subject, latest messages)
+            encoding = tiktoken.get_encoding(self.encoding_name)
+            tokens = encoding.encode(formatted_text)
+            # Keep a small buffer to ensure we don't exceed the limit
+            safe_limit = self.max_tokens - 100
+            truncated_tokens = tokens[:safe_limit]
+            formatted_text = encoding.decode(truncated_tokens)
+            formatted_text += "\n\n[Content truncated due to length]"
+            
+        return formatted_text
+        
+    def generate_embedding(self, text: str) -> List[float]:
+        """
+        Generate an embedding vector for the given text using OpenAI's API.
+        
+        Args:
+            text: The text to embed
+            
+        Returns:
+            Embedding vector as a list of floats
+        """
+        try:
+            # Call the OpenAI API to generate embedding
+            response = self.client.embeddings.create(
+                input=text,
+                model=self.model_name
+            )
+            
+            # Extract the embedding vector
+            embedding = response.data[0].embedding
+            
+            return embedding
+            
+        except Exception as e:
+            print(f"Error generating embedding: {str(e)}")
+            # Return a zero vector as fallback
+            return [0.0] * self.dimensions
+    
+    def process_thread_for_semantic_search(self, thread: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Process a complete email thread for semantic search by:
+        1. Formatting the thread into structured text
+        2. Creating an embedding vector
+        3. Returning the thread data enhanced with the embedding
+        
+        Args:
+            thread: Email thread data
+            
+        Returns:
+            Thread data with embedding
+        """
+        # Format the thread text
+        thread_text = self.format_thread_for_embedding(thread)
+        
+        # Generate embedding
+        embedding = self.generate_embedding(thread_text)
+        
+        # Add embedding to thread data
+        result = {
+            **thread,
+            "embedding": embedding,
+            "embedding_model": self.model_name,
+            "token_count": self.get_token_count(thread_text),
+            "text_content": thread_text  # Add the formatted text content for Pinecone
+        }
+        
+        return result
+
+
+# For backward compatibility, provide standalone functions that use the class internally
+_service = EmbeddingService()
+
 def format_thread_for_embedding(thread: Dict[str, Any]) -> str:
     """
     Format an email thread into a structured text for embedding.
     Creates a context that represents the full conversation thread.
     Preserves as much of the original email content as possible within token limits.
     """
-    formatted_text = f"Thread Subject: {thread.get('subject', '(No Subject)')}\n\n"
-
-    # Add participants
-    participants = thread.get("participants", [])
-    if participants:
-        formatted_text += "Participants: " + ", ".join(participants) + "\n\n"
-
-    # Add messages in chronological order
-    messages = thread.get("messages", [])
-    for i, message in enumerate(messages):
-        # Format date
-        date = message.get("date", "")
-        if date:
-            try:
-                # Convert ISO string to datetime for better formatting
-                date_obj = datetime.fromisoformat(date.replace("Z", "+00:00"))
-                formatted_date = date_obj.strftime("%Y-%m-%d %H:%M:%S")
-            except:
-                formatted_date = date
-        else:
-            formatted_date = "(no date)"
-
-        # Add message details
-        formatted_text += f"--- Message {i+1}/{len(messages)} ---\n"
-        formatted_text += f"From: {message.get('sender', '(Unknown)')}\n"
-        formatted_text += f"Date: {formatted_date}\n"
-        formatted_text += f"{'Read' if message.get('is_read') else 'Unread'}\n"
-
-        # Add message content (prefer full body if available, else snippet)
-        if message.get("body"):
-            # Strip HTML for cleaner text
-            import re
-
-            # More comprehensive HTML stripping
-            body = re.sub(
-                r"<style.*?>.*?</style>", "", message.get("body", ""), flags=re.DOTALL
-            )
-            body = re.sub(r"<script.*?>.*?</script>", "", body, flags=re.DOTALL)
-            body = re.sub(r"<[^>]+>", " ", body)
-            body = re.sub(r"&nbsp;", " ", body)
-            body = re.sub(r"\s+", " ", body).strip()
-            formatted_text += f"Content: {body}\n\n"
-        else:
-            formatted_text += f"Content: {message.get('snippet', '(No content)')}\n\n"
-
-    # Check token count
-    token_count = get_token_count(formatted_text)
-
-    # If we're below the limit, we can return the full text
-    if token_count <= MAX_TOKENS:
-        return formatted_text
-
-    # Otherwise, truncate while preserving structure
-    encoding = tiktoken.get_encoding(EMBEDDING_ENCODING)
-    tokens = encoding.encode(formatted_text)
-
-    # Keep tokens up to MAX_TOKENS - 100 for safety
-    truncated_tokens = tokens[: MAX_TOKENS - 100]
-    formatted_text = encoding.decode(truncated_tokens)
-    formatted_text += "...[truncated due to length]"
-
-    return formatted_text
-
+    return _service.format_thread_for_embedding(thread)
 
 def create_thread_embedding(thread_text: str) -> List[float]:
     """
     Generate an embedding vector for the given thread text using OpenAI's API.
     """
-    try:
-        response = client.embeddings.create(
-            model=EMBEDDING_MODEL, input=thread_text, encoding_format="float"
-        )
-        return response.data[0].embedding
-    except Exception as e:
-        print(f"Error creating embedding: {str(e)}")
-        # Return empty vector in case of error
-        return [0] * EMBEDDING_DIMENSIONS
-
+    return _service.generate_embedding(thread_text)
 
 def process_thread_for_semantic_search(thread: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -112,21 +179,4 @@ def process_thread_for_semantic_search(thread: Dict[str, Any]) -> Dict[str, Any]
     2. Creating an embedding vector
     3. Returning the thread data enhanced with the embedding
     """
-    # Format thread into a structured text representation
-    thread_text = format_thread_for_embedding(thread)
-
-    # Generate embedding vector
-    embedding = create_thread_embedding(thread_text)
-
-    # Create a result object with thread info and embedding
-    result = {
-        "thread_id": thread.get("thread_id"),
-        "subject": thread.get("subject", "(No Subject)"),
-        "participants": thread.get("participants", []),
-        "message_count": thread.get("message_count", 0),
-        "last_updated": thread.get("last_updated"),
-        "embedding": embedding,
-        "text_content": thread_text,  # Store the text content for reference
-    }
-
-    return result
+    return _service.process_thread_for_semantic_search(thread)

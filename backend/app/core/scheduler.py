@@ -5,6 +5,13 @@ from datetime import datetime
 import os
 from typing import Dict, Any, Optional
 import requests
+import logging
+
+# Import our notification scheduler
+from app.tasks.notification_scheduler import start_scheduler as start_notification_scheduler
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 # How often to check for new emails (in seconds)
 CHECK_INTERVAL = int(
@@ -19,7 +26,7 @@ class EmailScheduler:
         self.running = False
         self.thread = None
         self.api_base_url = os.getenv(
-            "API_BASE_URL", "https://emailbot-k8s7.onrender.com"
+            "API_BASE_URL", "http://localhost:8000/api/auth/callback"
         )
         self.admin_token = os.getenv("ADMIN_API_TOKEN", "")
 
@@ -86,12 +93,34 @@ class EmailScheduler:
 # Create a global instance of the scheduler
 scheduler = EmailScheduler()
 
+# Variable to track notification scheduler task
+notification_scheduler_task = None
+
 
 def start_scheduler():
-    """Start the email scheduler"""
+    """Start all schedulers"""
+    # Start the email polling scheduler
     scheduler.start()
+    
+    # Start the Gmail push notification refresh scheduler
+    global notification_scheduler_task
+    loop = asyncio.get_event_loop()
+    
+    try:
+        # Start the notification refresh scheduler as an asyncio task
+        notification_scheduler_task = start_notification_scheduler()
+        logger.info("Gmail push notification refresh scheduler started")
+    except Exception as e:
+        logger.error(f"Error starting notification scheduler: {str(e)}")
 
 
 def stop_scheduler():
-    """Stop the email scheduler"""
+    """Stop all schedulers"""
+    # Stop the email polling scheduler
     scheduler.stop()
+    
+    # Cancel the notification scheduler task if it exists
+    global notification_scheduler_task
+    if notification_scheduler_task:
+        notification_scheduler_task.cancel()
+        logger.info("Gmail push notification refresh scheduler stopped")
