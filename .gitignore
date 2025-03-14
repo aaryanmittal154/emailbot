@@ -50,6 +50,12 @@ frontend/.env.production.local
 *.swo
 .DS_Store
 
+# Credentials and secrets
+emailbot-452302-*.json
+*-credentials.json
+*.pem
+*.key
+
 # Database
 *.sqlite
 *.db
