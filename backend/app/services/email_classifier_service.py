@@ -17,14 +17,14 @@ logger = logging.getLogger(__name__)
 
 
 class EmailClassifierService:
-    """Service for automatic email classification using GPT-4o-mini"""
+    """Service for automatic email classification using gpt-4o"""
 
     @staticmethod
     async def classify_email(
         thread_data: Dict[str, Any], user: User, db: Session
     ) -> Dict[str, Any]:
         """
-        Classify an email thread using GPT-4o-mini and apply the appropriate label.
+        Classify an email thread using gpt-4o and apply the appropriate label.
         Also extract structured fields based on the email type.
 
         Args:
@@ -256,10 +256,10 @@ class EmailClassifierService:
             REMEMBER: Your categorization MUST be consistent and follow these rules EXACTLY.
             """
 
-            # Generate the classification with GPT-4o-mini
+            # Generate the classification with gpt-4o
             try:
                 response = client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model="gpt-4o",
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {

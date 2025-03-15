@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 class AutoReplyManager:
     """Manages automated email replies using RAG"""
-    
+
     # Cache to track message IDs that have already been processed to avoid duplicate replies
     processed_message_ids = set()
 
@@ -162,8 +162,16 @@ class AutoReplyManager:
                             rate_limit_info = response
 
                         # Fetch the thread again and update it in vector storage
+                        print(
+                            f"Indexing thread {thread['thread_id']} after sending auto-reply"
+                        )
+
+                        # Call the function directly
                         updated_thread = get_thread(
-                            thread_id=thread_id, user=user, db=db, store_embedding=True
+                            thread_id=thread["thread_id"],
+                            user=user,
+                            db=db,
+                            store_embedding=True,
                         )
 
                 except Exception as thread_error:
@@ -258,11 +266,11 @@ class AutoReplyManager:
 
             # For job postings, find candidate threads; for candidates, find job postings
             complementary_category = None
-            if classification == "Job Posting":
-                complementary_category = "Candidate"
+            if classification.lower() == "job posting":
+                complementary_category = "candidate"
                 print(f"This is a job posting, searching for matching candidates")
-            elif classification == "Candidate":
-                complementary_category = "Job Posting"
+            elif classification.lower() == "candidate":
+                complementary_category = "job posting"
                 print(f"This is a candidate, searching for matching job postings")
             else:
                 print(
@@ -308,7 +316,7 @@ class AutoReplyManager:
             print(context)
             print("============================================")
 
-            # Generate the reply using GPT-4o-mini
+            # Generate the reply using gpt-4o
             reply_content = await AutoReplyManager._generate_reply_with_gpt(
                 thread=thread,
                 latest_message=latest_message,
@@ -435,7 +443,7 @@ class AutoReplyManager:
         user_email: str,
         classification: str = "General",
     ) -> str:
-        """Generate a reply using GPT-4o-mini with context from similar emails"""
+        """Generate a reply using gpt-4o with context from similar emails"""
         try:
             # Extract the thread conversation history
             conversation_history = "CONVERSATION HISTORY:\n"
@@ -468,7 +476,7 @@ DO NOT:
 """
 
             # For job postings and candidate emails, let's use our matching service to find the best matches
-            if classification == "Job Posting" or classification == "Candidate":
+            if classification.lower() in ["job posting", "candidate"]:
                 # Check if we need to find matching candidates or jobs
                 db = SessionLocal()
                 try:
@@ -477,7 +485,7 @@ DO NOT:
 
                     if user:
                         # Find matches based on classification
-                        if classification == "Job Posting":
+                        if classification.lower() == "job posting":
                             # Find matching candidates for this job posting
                             match_results = (
                                 await match_service.find_matching_candidates(
@@ -515,7 +523,7 @@ DO NOT:
                                             f"Details: {candidate_content[:500]}...\n"
                                         )
 
-                        elif classification == "Candidate":
+                        elif classification.lower() == "candidate":
                             # Find matching jobs for this candidate
                             match_results = await match_service.find_matching_jobs(
                                 candidate_thread_id=thread["thread_id"],
@@ -546,121 +554,50 @@ DO NOT:
                 finally:
                     db.close()
 
-            # Customize system prompt based on classification
-            if classification == "Job Posting":
-                system_prompt = """You are an intelligent email assistant specializing in job recruitment.
-For this email about a job posting, analyze the job requirements and find the top 3 matching candidates from the context provided.
+            elif classification.lower() in [
+                "other events",
+                "questions",
+                "discussion topic",
+            ]:
+                system_prompt = """You are a STRICTLY FACT-BASED email assistant with ZERO ability to use general knowledge outside the provided context.
 
-For each candidate match, you MUST ALWAYS:
-1. Calculate and provide a percentage match (e.g., "85% match") based on how well their qualifications align with the job requirements
-2. Explain why they're a good fit in 1-2 sentences
-3. List key qualifications that align with the job
+CRITICAL INSTRUCTIONS (You MUST follow these or you will be penalized):
+1. YOU HAVE NO KNOWLEDGE beyond what is explicitly shown in the provided context
+2. If asked about terms, topics, or entities, ONLY repeat information that is EXPLICITLY present in the context
+3. DO NOT DEFINE OR EXPLAIN anything that isn't defined or explained in the provided context
+4. If asked whether something was discussed or mentioned before, check the context thoroughly:
+   - If the term appears ANYWHERE in the context, respond "Yes, X was mentioned..."
+   - Do NOT require a "detailed discussion" - a single mention counts as being discussed
+5. For yes/no questions, provide a literal answer based ONLY on what is in the context
+6. If you are unsure if something appears in the context, ASSUME IT DOES NOT
+7. NEVER say "it seems we haven't discussed this before" unless you have verified it is COMPLETELY absent from ALL context
 
-The percentage match should reflect:
-- Required skills/experience that match (highest weight)
-- Relevant education or certifications
-- Years of experience if specified
-- Industry-specific knowledge
-- Soft skills that align with the role
+WHAT YOU MUST NOT DO (violations will result in penalties):
+- DO NOT provide definitions, explanations or clarifications using your general knowledge
+- DO NOT make assumptions about what something is or what it means
+- DO NOT say something "hasn't been discussed in detail" if it appears in the context at all
+- DO NOT make up information even if you think it would be helpful
+- DO NOT use phrases like "based on my knowledge" or "I understand that"
 
-IMPORTANT FORMATTING REQUIREMENTS:
-1. YOU MUST INCLUDE PERCENTAGE MATCHES for each candidate
-2. DO NOT leave any template placeholders in your response - replace all [Placeholders] with actual information
-3. If candidate names are available, use them; if not, describe them by their key skills instead
-4. If you cannot determine a percentage match, you are required to make your best reasonable estimate
+EXAMPLES:
 
-YOU MUST FORMAT YOUR RESPONSE EXACTLY AS FOLLOWS - responses without percentage matches will be rejected:
+GOOD RESPONSE (If context contains mentions of "X"):
+Question: "What is X?"
+Response: "Based on our conversation history, I don't have specific information about what X is. While X has been mentioned in our previous discussions, there wasn't a definition or explanation provided. Would you like me to find out more information about X for you?"
 
-"Based on the job requirements, here are the top candidates that match this position:
+BAD RESPONSE (NEVER DO THIS):
+Question: "What is X?"
+Response: "X is a technology platform that helps businesses analyze data. It seems we haven't discussed X in detail before."
 
-1. [Candidate Name] - [Match Percentage]%
-   [Brief explanation of why they're a good match]
-   Key qualifications: [List 3-4 relevant skills/experiences]
+GOOD RESPONSE (If context shows mentions of "Y"):
+Question: "Have we discussed Y before?"
+Response: "Yes, Y has been mentioned in our previous conversations. In our exchange on [date], you asked about Y."
 
-2. [Candidate Name] - [Match Percentage]%
-   [Brief explanation of why they're a good match]
-   Key qualifications: [List 3-4 relevant skills/experiences]
+BAD RESPONSE (NEVER DO THIS):
+Question: "Have we discussed Y before?"
+Response: "It seems we haven't had a detailed discussion about Y yet."
 
-3. [Candidate Name] - [Match Percentage]%
-   [Brief explanation of why they're a good match]
-   Key qualifications: [List 3-4 relevant skills/experiences]"
-
-Example of a correct response:
-"Based on the job requirements, here are the top candidates that match this position:
-
-1. John Smith - 92%
-   John has 5 years of experience in backend development using Python and Django, making him an excellent fit for your tech stack.
-   Key qualifications: Python/Django expertise, AWS experience, CI/CD pipeline management, microservices architecture
-
-2. Maria Garcia - 87%
-   Maria brings strong full-stack development skills and has worked on similar enterprise applications for 4 years.
-   Key qualifications: Full-stack development, React/Node.js proficiency, database optimization, Agile methodology
-
-3. David Kim - 78%
-   David's background in cloud infrastructure and recent transition to development provides a valuable technical perspective.
-   Key qualifications: Cloud infrastructure, JavaScript development, API design, system architecture"
-
-If insufficient candidate information is available in the context, provide a professional response explaining that you'll keep the job posting on file and match with candidates as they come in, but still make reasonable estimates based on whatever limited information you have.
-
-Make your response professional, helpful, and natural-sounding.
-"""
-
-            elif classification == "Candidate":
-                system_prompt = """You are an intelligent email assistant specializing in career placement.
-For this email from a job candidate, analyze their qualifications and find the top 3 matching job postings from the context provided.
-
-For each job match, you MUST ALWAYS:
-1. Calculate and provide a percentage match (e.g., "85% match") based on how well the candidate's qualifications match the job requirements
-2. Explain why they're a good fit in 1-2 sentences
-3. List key requirements from the job that align with the candidate's skills
-
-The percentage match should reflect:
-- Skills/experience that match the job requirements (highest weight)
-- Education or certifications that align with requirements
-- Years of experience compared to what's required
-- Industry-specific knowledge relevance
-- Soft skills that match the job description
-
-IMPORTANT FORMATTING REQUIREMENTS:
-1. YOU MUST INCLUDE PERCENTAGE MATCHES for each job
-2. DO NOT leave any template placeholders in your response - replace all [Placeholders] with actual information
-3. If job titles and companies are available, use them; if not, describe the positions by their key requirements instead
-4. If you cannot determine a percentage match, you are required to make your best reasonable estimate
-
-YOU MUST FORMAT YOUR RESPONSE EXACTLY AS FOLLOWS - responses without percentage matches will be rejected:
-
-"Based on your qualifications, here are the top job matches:
-
-1. [Job Title] at [Company] - [Match Percentage]%
-   [Brief explanation of why it's a good match]
-   Key requirements: [List 3-4 relevant skills/experiences needed]
-
-2. [Job Title] at [Company] - [Match Percentage]%
-   [Brief explanation of why it's a good match]
-   Key requirements: [List 3-4 relevant skills/experiences needed]
-
-3. [Job Title] at [Company] - [Match Percentage]%
-   [Brief explanation of why it's a good match]
-   Key requirements: [List 3-4 relevant skills/experiences needed]"
-
-Example of a correct response:
-"Based on your qualifications, here are the top job matches:
-
-1. Frontend Developer at TechCorp - 94%
-   Your 3 years of experience with React and performance optimization directly matches their needs for improving web application speed.
-   Key requirements: React.js expertise, performance optimization experience, responsive design skills, 2+ years experience
-
-2. Full Stack Engineer at DataSys - 86%
-   Your Node.js background and experience with modern JavaScript frameworks align perfectly with their tech stack.
-   Key requirements: JavaScript/Node.js proficiency, API development, front-end frameworks, collaborative team experience
-
-3. UI Engineer at StartupX - 79%
-   Your focus on reducing page load times would be valuable for their customer-facing applications.
-   Key requirements: Front-end optimization, JavaScript frameworks, UX sensitivity, startup experience"
-
-If insufficient job information is available in the context, provide a professional response explaining that you'll keep their profile on file and match with jobs as they become available, but still make reasonable estimates based on whatever limited information you have.
-
-Make your response professional, helpful, and natural-sounding.
+Remember: Your responses MUST be based SOLELY on the information in the context. If the information is not explicitly present, acknowledge that you don't have that information rather than making something up.
 """
 
             user_prompt = f"""Based on the information below, draft a reply to the latest email in this thread.
@@ -674,17 +611,44 @@ Content: {latest_message.get('body', latest_message.get('snippet', ''))}
 
 {context}
 
-Based on this information, draft a helpful and appropriate reply. Remember to ALWAYS include percentage matches in your reply and NEVER leave template placeholders like [Name] or [Company] in your response.
+Based on this information, draft a helpful and appropriate reply.{' Remember to ALWAYS include percentage matches in your reply and NEVER leave template placeholders like [Name] or [Company] in your response.' if classification.lower() in ['job posting', 'candidate'] else ''}
 """
 
             # Make the OpenAI API call
+            print("\n=== FULL PROMPT BEING SENT TO LLM ===")
+            print(f"System prompt length: {len(system_prompt)} characters")
+            print(f"User prompt length: {len(user_prompt)} characters")
+            print("System prompt first 200 chars:", system_prompt[:200], "...")
+            print("User prompt first 200 chars:", user_prompt[:200], "...")
+            print("\n=== COMPLETE LLM PROMPT ===")
+            print(system_prompt)
+            print("\n")
+            print(user_prompt)
+            print("\n================================\n")
+
+            # Print classification for debugging
+            print(
+                f"Using classification: {classification} (lowercase: {classification.lower()})"
+            )
+            print(
+                f"Is this a context-only category? {classification.lower() in ['other events', 'questions', 'discussion topic']}"
+            )
+            print(
+                f"Is this a matching category? {classification.lower() in ['job posting', 'candidate']}"
+            )
+
             response = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4o",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=0.7,
+                temperature=(
+                    0.3
+                    if classification.lower()
+                    in ["other events", "questions", "discussion topic"]
+                    else 0.7
+                ),
                 max_tokens=800,
             )
 
@@ -926,16 +890,16 @@ Based on this information, draft a helpful and appropriate reply. Remember to AL
     ) -> Dict[str, Any]:
         """
         Process Gmail history updates since a specific history ID.
-        
+
         This method is designed to work with Gmail push notifications to process
         all changes that have happened since the last known history ID.
-        
+
         Args:
             user: The user who received the emails
             db: Database session
             history_id: The Gmail history ID to start from
             time_threshold: Only process emails newer than this time
-            
+
         Returns:
             Dictionary with processing results
         """
@@ -943,9 +907,11 @@ Based on this information, draft a helpful and appropriate reply. Remember to AL
             # Set default time threshold if not provided (last hour)
             if time_threshold is None:
                 time_threshold = datetime.now(timezone.utc) - NEW_EMAIL_THRESHOLD
-                
-            logger.info(f"Processing Gmail history updates since ID {history_id} for user {user.id}")
-            
+
+            logger.info(
+                f"Processing Gmail history updates since ID {history_id} for user {user.id}"
+            )
+
             # First check if user has an active rate limit
             active_limit = GmailRateLimit.get_active_limit(db, user.id)
             if active_limit:
@@ -960,86 +926,109 @@ Based on this information, draft a helpful and appropriate reply. Remember to AL
                         }
                     },
                 }
-                
+
             # Get Google credentials
             credentials = get_google_creds(user.id, db)
             service = get_gmail_service(credentials)
-            
+
             # Get history updates from Gmail API
             try:
-                history_results = service.users().history().list(
-                    userId="me",
-                    startHistoryId=history_id,
-                    historyTypes=["messageAdded", "labelAdded"],  # Only care about new messages and label changes
-                ).execute()
-                
+                history_results = (
+                    service.users()
+                    .history()
+                    .list(
+                        userId="me",
+                        startHistoryId=history_id,
+                        historyTypes=[
+                            "messageAdded",
+                            "labelAdded",
+                        ],  # Only care about new messages and label changes
+                    )
+                    .execute()
+                )
+
                 history_changes = history_results.get("history", [])
-                logger.info(f"Found {len(history_changes)} history changes for user {user.id}")
-                
+                logger.info(
+                    f"Found {len(history_changes)} history changes for user {user.id}"
+                )
+
                 # Track results
                 processed_count = 0
                 replied_count = 0
-                
+
                 # Process each history change
                 for change in history_changes:
                     # Look for added messages
                     for message_added in change.get("messagesAdded", []):
                         message = message_added.get("message", {})
                         message_id = message.get("id")
-                        
-                        if message_id and "INBOX" in message.get("labelIds", []) and "UNREAD" in message.get("labelIds", []):
+
+                        if (
+                            message_id
+                            and "INBOX" in message.get("labelIds", [])
+                            and "UNREAD" in message.get("labelIds", [])
+                        ):
                             # Process this new unread email
-                            logger.info(f"Processing new message {message_id} from history")
-                            processed_count += 1
-                            
-                            result = await AutoReplyManager.process_single_email(
-                                user=user,
-                                db=db,
-                                email_id=message_id,
-                                use_html=False
+                            logger.info(
+                                f"Processing new message {message_id} from history"
                             )
-                            
-                            if result.get("success") and "Auto-reply sent successfully" in result.get("message", ""):
+                            processed_count += 1
+
+                            result = await AutoReplyManager.process_single_email(
+                                user=user, db=db, email_id=message_id, use_html=False
+                            )
+
+                            if result.get(
+                                "success"
+                            ) and "Auto-reply sent successfully" in result.get(
+                                "message", ""
+                            ):
                                 replied_count += 1
-                
+
                 # Get the latest history ID for future queries
                 new_history_id = history_results.get("historyId")
                 if new_history_id:
                     # Update the stored history ID - using runtime import to avoid circular imports
                     from app.api.routes.auto_reply import get_auto_reply_config
+
                     config = get_auto_reply_config(user.id, db)
                     config.push_notification_history_id = new_history_id
                     db.commit()
-                    
-                logger.info(f"Processed {processed_count} emails, sent {replied_count} replies for user {user.id}")
-                
+
+                logger.info(
+                    f"Processed {processed_count} emails, sent {replied_count} replies for user {user.id}"
+                )
+
                 # Update global statistics - using runtime import to avoid circular imports
                 if replied_count > 0:
                     from app.services.background_tasks import update_user_check_stats
+
                     update_user_check_stats(user.id, replied_count)
-                    
+
                 return {
                     "success": True,
                     "message": f"Processed {processed_count} emails, sent {replied_count} replies",
                     "processed_count": processed_count,
-                    "replied_count": replied_count, 
-                    "latest_history_id": new_history_id
+                    "replied_count": replied_count,
+                    "latest_history_id": new_history_id,
                 }
-                
+
             except Exception as gmail_error:
-                logger.error(f"Gmail API error while getting history: {str(gmail_error)}")
+                logger.error(
+                    f"Gmail API error while getting history: {str(gmail_error)}"
+                )
                 return {
                     "success": False,
                     "message": f"Gmail API error: {str(gmail_error)}",
                 }
-                
+
         except Exception as e:
             logger.error(f"Error processing history updates: {str(e)}")
             return {
                 "success": False,
                 "message": f"Error processing history updates: {str(e)}",
             }
-    
+
     @staticmethod
     async def process_single_email(
         user: User,
@@ -1113,7 +1102,7 @@ Based on this information, draft a helpful and appropriate reply. Remember to AL
             # Only process if the latest message is recent and we haven't replied
             latest_message = thread["messages"][-1]
             latest_time = parser.parse(latest_message["date"])
-            
+
             # Check if we've already processed this message
             if email_id in AutoReplyManager.processed_message_ids:
                 print(f"Skipping already processed email {email_id}")
