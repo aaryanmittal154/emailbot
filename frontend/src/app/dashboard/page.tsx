@@ -164,6 +164,8 @@ export default function Dashboard() {
 
   // Add state for checking emails
   const [isCheckingEmails, setIsCheckingEmails] = useState(false);
+  // Add state for tracking active tab
+  const [tabIndex, setTabIndex] = useState(0);
 
   useEffect(() => {
     const token = localStorage.getItem("auth_token");
@@ -1619,7 +1621,7 @@ export default function Dashboard() {
       await fetchLabeledEmails();
 
       // For thoroughness, refresh any other data views in other tabs
-      if (activeTab === 4) {
+      if (tabIndex === 4) {
         // If Follow-ups tab is active or might be viewed
         await fetchSimilarEmails();
       }
@@ -1713,7 +1715,13 @@ export default function Dashboard() {
       )}
 
       <Flex pt={4} height="100vh" direction="column">
-        <Tabs variant="enclosed" colorScheme="blue" mb={4}>
+        <Tabs
+          variant="enclosed"
+          colorScheme="blue"
+          mb={4}
+          index={tabIndex}
+          onChange={(index) => setTabIndex(index)}
+        >
           <TabList>
             <Tab>Inbox</Tab>
             <Tab>Job Postings</Tab>

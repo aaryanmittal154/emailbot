@@ -86,25 +86,25 @@ def list_messages(
                 .order_by(Email.created_at.asc())
                 .first()
             )
-            
+
             if earliest_email:
                 initial_indexing_timestamp = earliest_email.created_at
                 print(f"Initial indexing timestamp: {initial_indexing_timestamp}")
             else:
                 # No emails yet
                 initial_indexing_timestamp = None
-                
+
             # Get all emails that are either:
             # 1. Part of the initial set (limited by user preference) OR
             # 2. Added after the initial indexing (new emails)
             query = db.query(Email).filter(Email.user_id == user.id)
-            
+
             # Always order by date descending (newest first)
             query = query.order_by(Email.date.desc())
-            
+
             # When we have pagination, apply it
             query = query.offset(offset).limit(max_results)
-            
+
             # Execute the query
             existing_emails = query.all()
 
@@ -121,9 +121,7 @@ def list_messages(
                         "gmail_id": email.gmail_id,
                         "thread_id": email.thread_id,
                         "sender": email.sender,
-                        "recipients": (
-                            email.recipients if email.recipients else []
-                        ),
+                        "recipients": (email.recipients if email.recipients else []),
                         "subject": email.subject or "",
                         "snippet": email.snippet or "",
                         "date": email.date.isoformat() if email.date else None,
@@ -131,14 +129,10 @@ def list_messages(
                         "has_attachment": email.has_attachment,
                         "is_read": email.is_read,
                         "created_at": (
-                            email.created_at.isoformat()
-                            if email.created_at
-                            else None
+                            email.created_at.isoformat() if email.created_at else None
                         ),
                         "updated_at": (
-                            email.updated_at.isoformat()
-                            if email.updated_at
-                            else None
+                            email.updated_at.isoformat() if email.updated_at else None
                         ),
                     }
                     for email in existing_emails
@@ -217,6 +211,8 @@ def list_messages(
                 ),
                 "subject": email_metadata.subject or "",
                 "snippet": email_metadata.snippet or "",
+                "body": final_body,  # Add the message body
+                "full_content": email_metadata.full_content,  # Add the full content from DB if available
                 "date": (
                     email_metadata.date.isoformat() if email_metadata.date else None
                 ),
@@ -255,148 +251,235 @@ def get_thread(
         credentials = get_google_creds(user.id, db)
 
         # Create Gmail API service
-        service = get_gmail_service(credentials)
+        service = build_gmail_service(credentials)
 
-        # Get thread from Gmail API
-        thread = (
-            service.users()
-            .threads()
-            .get(userId="me", id=thread_id, format="full")
-            .execute()
+        # Try to find thread messages from database first (if all are cached)
+        cached_messages = (
+            db.query(Email)
+            .filter(Email.thread_id == thread_id, Email.user_id == user.id)
+            .order_by(Email.date.asc())
+            .all()
         )
 
-        print(
-            f"Retrieved thread {thread_id} with {len(thread.get('messages', []))} messages"
-        )
-
-        # Process and organize thread messages
+        # Initial thread data structure
         messages = []
         participants = set()
         subject = ""
         # Use timezone-aware datetime.min
         last_updated = datetime.min.replace(tzinfo=timezone.utc)
 
-        # First pass - extract all message data
-        for message in thread.get("messages", []):
-            # Get message headers
-            headers = {
-                header["name"].lower(): header["value"]
-                for header in message.get("payload", {}).get("headers", [])
-            }
+        # Check if we need to get from Gmail API (if not all messages are in DB)
+        get_from_api = True
 
-            # Process email metadata
-            email_metadata = process_email_metadata(message, headers, user.id, db)
+        # If we have messages in database, check if we have the complete thread
+        if cached_messages:
+            # First get the thread data to check the message count
+            thread_data = (
+                service.users().threads().get(userId="me", id=thread_id).execute()
+            )
 
-            # Extract message body if available
-            body = {}
-            message_parts = [message.get("payload", {})]
-
-            while message_parts:
-                part = message_parts.pop(0)
-
-                # Handle multipart messages
-                if part.get("mimeType", "").startswith("multipart/"):
-                    if "parts" in part:
-                        message_parts.extend(part["parts"])
-                # Handle text parts
-                elif (
-                    part.get("mimeType") == "text/plain"
-                    and "body" in part
-                    and "data" in part["body"]
-                ):
-                    encoded_data = (
-                        part["body"]["data"].replace("-", "+").replace("_", "/")
-                    )
-                    body["plain"] = base64.b64decode(encoded_data).decode("utf-8")
-                elif (
-                    part.get("mimeType") == "text/html"
-                    and "body" in part
-                    and "data" in part["body"]
-                ):
-                    encoded_data = (
-                        part["body"]["data"].replace("-", "+").replace("_", "/")
-                    )
-                    body["html"] = base64.b64decode(encoded_data).decode("utf-8")
-
-            # Determine the best body content to use (prefer HTML, fall back to plain text)
-            final_body = body.get("html", body.get("plain", ""))
-
-            # For plain text, convert newlines to <br> for better display
-            if not body.get("html") and body.get("plain"):
-                # Simple conversion of plain text to HTML with preservation of line breaks
-                final_body = (
-                    "<div style='white-space: pre-wrap;'>"
-                    + body.get("plain", "")
-                    .replace("&", "&amp;")
-                    .replace("<", "&lt;")
-                    .replace(">", "&gt;")
-                    .replace("\n", "<br>")
-                    + "</div>"
+            # If we have all messages cached, use the cache
+            if len(cached_messages) == len(thread_data.get("messages", [])):
+                get_from_api = False
+                print(
+                    f"Using {len(cached_messages)} cached messages for thread {thread_id}"
                 )
 
-            # Convert SQLAlchemy model to dictionary
-            email_dict = {
-                "id": email_metadata.id,
-                "user_id": email_metadata.user_id,
-                "gmail_id": email_metadata.gmail_id,
-                "thread_id": email_metadata.thread_id,
-                "sender": email_metadata.sender,
-                "recipients": (
-                    email_metadata.recipients if email_metadata.recipients else []
-                ),
-                "subject": email_metadata.subject or "",
-                "snippet": email_metadata.snippet or "",
-                "body": final_body,  # Add the message body
-                "date": (
-                    email_metadata.date.isoformat() if email_metadata.date else None
-                ),
-                "labels": email_metadata.labels if email_metadata.labels else [],
-                "has_attachment": email_metadata.has_attachment,
-                "is_read": email_metadata.is_read,
-                "created_at": (
-                    email_metadata.created_at.isoformat()
-                    if email_metadata.created_at
-                    else None
-                ),
-                "updated_at": (
-                    email_metadata.updated_at.isoformat()
-                    if email_metadata.updated_at
-                    else None
-                ),
-                # Add internal date from Gmail for precise sorting
-                "internal_date": int(message.get("internalDate", 0)),
-                # Track message position in conversation
-                "message_position": {"is_first": False, "is_last": False},
-            }
-            messages.append(email_dict)
+        # If we need to get from API, process thread messages from Gmail API
+        if get_from_api:
+            # Get the thread data from Gmail API
+            thread_data = (
+                service.users()
+                .threads()
+                .get(userId="me", id=thread_id, format="full")
+                .execute()
+            )
 
-            # Extract participants
-            if "from" in headers:
-                participants.add(headers["from"])
+            # Process each message in the thread
+            for message in thread_data.get("messages", []):
+                # Extract headers
+                headers = {}
+                for header in message.get("payload", {}).get("headers", []):
+                    headers[header["name"].lower()] = header["value"]
 
-            if "to" in headers:
-                for recipient in headers["to"].split(","):
-                    participants.add(recipient.strip())
+                # Check if we already have this message in the database
+                email_metadata = (
+                    db.query(Email)
+                    .filter(
+                        Email.gmail_id == message["id"],
+                        Email.user_id == user.id,
+                    )
+                    .first()
+                )
 
-            # Get subject
-            if "subject" in headers and not subject:
-                subject = headers["subject"]
+                if not email_metadata:
+                    # Process and store the email metadata
+                    email_metadata = process_email_metadata(
+                        message, headers, user.id, db
+                    )
 
-            # Track latest message date
-            # Ensure both dates have timezone info before comparing
-            if email_metadata.date:
-                # Add timezone if not present
-                email_date = email_metadata.date
-                if email_date.tzinfo is None:
-                    email_date = email_date.replace(tzinfo=timezone.utc)
+                # Extract message body
+                body = {}
+                message_parts = [message.get("payload", {})]
 
-                # Ensure last_updated has timezone info (it should already, but just to be safe)
-                if last_updated.tzinfo is None:
-                    last_updated = last_updated.replace(tzinfo=timezone.utc)
+                while message_parts:
+                    part = message_parts.pop(0)
 
-                # Now both datetimes are timezone-aware, so we can safely compare them
-                if email_date > last_updated:
-                    last_updated = email_date
+                    # Handle multipart messages
+                    if part.get("mimeType", "").startswith("multipart/"):
+                        if "parts" in part:
+                            message_parts.extend(part["parts"])
+                    # Handle text parts
+                    elif (
+                        part.get("mimeType") == "text/plain"
+                        and "body" in part
+                        and "data" in part["body"]
+                    ):
+                        encoded_data = (
+                            part["body"]["data"].replace("-", "+").replace("_", "/")
+                        )
+                        body["plain"] = base64.b64decode(encoded_data).decode("utf-8")
+                    elif (
+                        part.get("mimeType") == "text/html"
+                        and "body" in part
+                        and "data" in part["body"]
+                    ):
+                        encoded_data = (
+                            part["body"]["data"].replace("-", "+").replace("_", "/")
+                        )
+                        body["html"] = base64.b64decode(encoded_data).decode("utf-8")
+
+                # Determine the best body content to use (prefer HTML, fall back to plain text)
+                final_body = body.get("html", body.get("plain", ""))
+
+                # For plain text, convert newlines to <br> for better display
+                if not body.get("html") and body.get("plain"):
+                    # Simple conversion of plain text to HTML with preservation of line breaks
+                    final_body = (
+                        "<div style='white-space: pre-wrap;'>"
+                        + body.get("plain", "")
+                        .replace("&", "&amp;")
+                        .replace("<", "&lt;")
+                        .replace(">", "&gt;")
+                        .replace("\n", "<br>")
+                        + "</div>"
+                    )
+
+                # Convert SQLAlchemy model to dictionary
+                email_dict = {
+                    "id": email_metadata.id,
+                    "user_id": email_metadata.user_id,
+                    "gmail_id": email_metadata.gmail_id,
+                    "thread_id": email_metadata.thread_id,
+                    "sender": email_metadata.sender,
+                    "recipients": (
+                        email_metadata.recipients if email_metadata.recipients else []
+                    ),
+                    "subject": email_metadata.subject or "",
+                    "snippet": email_metadata.snippet or "",
+                    "body": final_body,  # Add the message body
+                    "full_content": email_metadata.full_content,  # Add the full content from DB if available
+                    "date": (
+                        email_metadata.date.isoformat() if email_metadata.date else None
+                    ),
+                    "labels": email_metadata.labels if email_metadata.labels else [],
+                    "has_attachment": email_metadata.has_attachment,
+                    "is_read": email_metadata.is_read,
+                    "created_at": (
+                        email_metadata.created_at.isoformat()
+                        if email_metadata.created_at
+                        else None
+                    ),
+                    "updated_at": (
+                        email_metadata.updated_at.isoformat()
+                        if email_metadata.updated_at
+                        else None
+                    ),
+                    # Add internal date from Gmail for precise sorting
+                    "internal_date": int(message.get("internalDate", 0)),
+                    # Track message position in conversation
+                    "message_position": {"is_first": False, "is_last": False},
+                }
+                messages.append(email_dict)
+
+                # Extract participants
+                if "from" in headers:
+                    participants.add(headers["from"])
+
+                if "to" in headers:
+                    for recipient in headers["to"].split(","):
+                        participants.add(recipient.strip())
+
+                # Extract subject (use the first message's subject as the thread subject)
+                if "subject" in headers and not subject:
+                    subject = headers["subject"]
+
+                # Track last updated date
+                if email_metadata.date and email_metadata.date > last_updated:
+                    last_updated = email_metadata.date
+        else:
+            # Use cached messages
+            for email_metadata in cached_messages:
+                # Try to extract body content for display
+                body_content = ""
+
+                # If we have full_content, convert it to HTML for display
+                if email_metadata.full_content:
+                    body_content = f"<div style='white-space: pre-wrap;'>{html.escape(email_metadata.full_content).replace(chr(10), '<br>')}</div>"
+
+                # Convert SQLAlchemy model to dictionary
+                email_dict = {
+                    "id": email_metadata.id,
+                    "user_id": email_metadata.user_id,
+                    "gmail_id": email_metadata.gmail_id,
+                    "thread_id": email_metadata.thread_id,
+                    "sender": email_metadata.sender,
+                    "recipients": (
+                        email_metadata.recipients if email_metadata.recipients else []
+                    ),
+                    "subject": email_metadata.subject or "",
+                    "snippet": email_metadata.snippet or "",
+                    "body": (
+                        body_content
+                        if body_content
+                        else f"<div>{email_metadata.snippet or ''}</div>"
+                    ),
+                    "full_content": email_metadata.full_content,  # Add the full content from DB
+                    "date": (
+                        email_metadata.date.isoformat() if email_metadata.date else None
+                    ),
+                    "labels": email_metadata.labels if email_metadata.labels else [],
+                    "has_attachment": email_metadata.has_attachment,
+                    "is_read": email_metadata.is_read,
+                    "created_at": (
+                        email_metadata.created_at.isoformat()
+                        if email_metadata.created_at
+                        else None
+                    ),
+                    "updated_at": (
+                        email_metadata.updated_at.isoformat()
+                        if email_metadata.updated_at
+                        else None
+                    ),
+                    "internal_date": 0,  # Unknown for cached messages
+                    "message_position": {"is_first": False, "is_last": False},
+                }
+                messages.append(email_dict)
+
+                # Extract participants
+                if email_metadata.sender:
+                    participants.add(email_metadata.sender)
+
+                for recipient in email_metadata.recipients or []:
+                    participants.add(recipient)
+
+                # Extract subject
+                if email_metadata.subject and not subject:
+                    subject = email_metadata.subject
+
+                # Track last updated date
+                if email_metadata.date and email_metadata.date > last_updated:
+                    last_updated = email_metadata.date
 
         # Sort messages chronologically by internalDate
         messages.sort(key=lambda x: x["internal_date"])
@@ -464,29 +547,31 @@ def send_email(
         original_date = ""
         original_message_id = None
         thread_data = None
-        
+
         if email_request.thread_id:
             try:
                 # Get the full thread data for both quoting and threading
                 thread_data = get_thread(email_request.thread_id, user, db)
-                
+
                 if thread_data and thread_data["messages"]:
                     # Find the original message to reply to (latest message)
                     original_message = thread_data["messages"][-1]
-                    
+
                     # Extract sender and date from original message for quoting
                     original_sender = original_message.get("sender", "")
                     original_date = original_message.get("date", "")
-                    
+
                     # Get plain text content for quoting
-                    message_content = original_message.get("body", original_message.get("snippet", ""))
-                    
+                    message_content = original_message.get(
+                        "body", original_message.get("snippet", "")
+                    )
+
                     # Extract the message ID from the latest message
                     for header in original_message.get("headers", []):
                         if header["name"].lower() == "message-id":
                             original_message_id = header["value"]
                             break
-                    
+
                     # Create quoted text in standard email format
                     if email_request.html:
                         # Format for HTML emails
@@ -500,8 +585,8 @@ def send_email(
                         """
                     else:
                         # Format for plain text emails
-                        quoted_lines = message_content.split('\n')
-                        quoted_text = '\n'.join([f"> {line}" for line in quoted_lines])
+                        quoted_lines = message_content.split("\n")
+                        quoted_text = "\n".join([f"> {line}" for line in quoted_lines])
                         quoted_content = f"\n\nOn {original_date}, {original_sender} wrote:\n{quoted_text}"
             except Exception as e:
                 print(f"Error getting original message content: {str(e)}")
@@ -521,12 +606,12 @@ def send_email(
                 # Get the Gmail message details directly
                 original_gmail_message = None
                 original_message_id = None
-                
+
                 # Try to get the ACTUAL message from Gmail directly
                 try:
                     # First get the message ID from our database or thread data
                     message_id_to_reply_to = None
-                    
+
                     if thread_data and thread_data["messages"]:
                         # Get the most recent message that isn't from the current user
                         for msg in reversed(thread_data["messages"]):
@@ -534,162 +619,200 @@ def send_email(
                                 if "gmail_id" in msg:
                                     message_id_to_reply_to = msg["gmail_id"]
                                     break
-                        
+
                         # If no messages from others found, just use the last message
                         if not message_id_to_reply_to and thread_data["messages"]:
-                            message_id_to_reply_to = thread_data["messages"][-1].get("gmail_id")
-                            
+                            message_id_to_reply_to = thread_data["messages"][-1].get(
+                                "gmail_id"
+                            )
+
                     # Once we have the message ID, get the FULL Gmail message
                     if message_id_to_reply_to:
                         # Get full message format to use for reply
-                        original_gmail_message = service.users().messages().get(
-                            userId='me',
-                            id=message_id_to_reply_to,
-                            format='full'
-                        ).execute()
-                        
+                        original_gmail_message = (
+                            service.users()
+                            .messages()
+                            .get(userId="me", id=message_id_to_reply_to, format="full")
+                            .execute()
+                        )
+
                         # Extract the RFC822 Message-ID for proper threading
-                        headers = {h['name']: h['value'] for h in original_gmail_message.get('payload', {}).get('headers', [])}
-                        original_message_id = headers.get('Message-ID')
-                        
-                        print(f"Retrieved original Gmail message: {message_id_to_reply_to}")
+                        headers = {
+                            h["name"]: h["value"]
+                            for h in original_gmail_message.get("payload", {}).get(
+                                "headers", []
+                            )
+                        }
+                        original_message_id = headers.get("Message-ID")
+
+                        print(
+                            f"Retrieved original Gmail message: {message_id_to_reply_to}"
+                        )
                 except Exception as msg_error:
                     print(f"Error getting original Gmail message: {str(msg_error)}")
-                
+
                 # ==========================================
                 # APPROACH 1: Use Gmail's reply drafting approach
                 # ==========================================
-                
+
                 if original_gmail_message:
                     try:
                         # Create a modified draft reply
                         # This uses Gmail's native threading by modifying an existing message
-                        
+
                         # Create a draft based on the original message
                         draft_reply = {
-                            'message': {
-                                'threadId': email_request.thread_id,
-                                'payload': {
-                                    'headers': [
-                                        {'name': 'To', 'value': ', '.join(email_request.to)},
-                                        {'name': 'Subject', 'value': email_request.subject},
-                                        {'name': 'In-Reply-To', 'value': original_message_id},
-                                        {'name': 'References', 'value': original_message_id}
+                            "message": {
+                                "threadId": email_request.thread_id,
+                                "payload": {
+                                    "headers": [
+                                        {
+                                            "name": "To",
+                                            "value": ", ".join(email_request.to),
+                                        },
+                                        {
+                                            "name": "Subject",
+                                            "value": email_request.subject,
+                                        },
+                                        {
+                                            "name": "In-Reply-To",
+                                            "value": original_message_id,
+                                        },
+                                        {
+                                            "name": "References",
+                                            "value": original_message_id,
+                                        },
                                     ],
-                                    'body': {
-                                        'data': base64.urlsafe_b64encode(body_content.encode()).decode()
-                                    }
-                                }
+                                    "body": {
+                                        "data": base64.urlsafe_b64encode(
+                                            body_content.encode()
+                                        ).decode()
+                                    },
+                                },
                             }
                         }
-                        
+
                         # Add CC if provided
                         if email_request.cc:
-                            draft_reply['message']['payload']['headers'].append(
-                                {'name': 'Cc', 'value': ', '.join(email_request.cc)}
+                            draft_reply["message"]["payload"]["headers"].append(
+                                {"name": "Cc", "value": ", ".join(email_request.cc)}
                             )
-                        
+
                         # Try a totally different approach - create a draft then send it
                         # This forces Gmail to handle the threading
                         try:
                             # Create a proper MIME message with ALL required headers
                             email_mime = MIMEMultipart()
-                            email_mime['From'] = user.email
-                            email_mime['To'] = ', '.join(email_request.to)
-                            email_mime['Subject'] = email_request.subject
-                            
+                            email_mime["From"] = user.email
+                            email_mime["To"] = ", ".join(email_request.to)
+                            email_mime["Subject"] = email_request.subject
+
                             if original_message_id:
-                                email_mime['In-Reply-To'] = original_message_id
-                                email_mime['References'] = original_message_id
-                            
+                                email_mime["In-Reply-To"] = original_message_id
+                                email_mime["References"] = original_message_id
+
                             # Add body
                             if email_request.html:
-                                part = MIMEText(body_content, 'html')
+                                part = MIMEText(body_content, "html")
                             else:
-                                part = MIMEText(body_content, 'plain')
-                                
+                                part = MIMEText(body_content, "plain")
+
                             email_mime.attach(part)
-                            
+
                             # Convert to raw and encode
-                            raw_message = base64.urlsafe_b64encode(email_mime.as_bytes()).decode()
-                            
+                            raw_message = base64.urlsafe_b64encode(
+                                email_mime.as_bytes()
+                            ).decode()
+
                             # Send using a different format that forces Gmail to use threading
-                            sent_message = service.users().messages().send(
-                                userId='me',
-                                body={
-                                    'raw': raw_message,
-                                    'threadId': email_request.thread_id
-                                }
-                            ).execute()
-                            
-                            print(f"Sent using Gmail direct approach with explicit threadId")
-                            print(f"Thread ID in response: {sent_message.get('threadId')}")
-                            
+                            sent_message = (
+                                service.users()
+                                .messages()
+                                .send(
+                                    userId="me",
+                                    body={
+                                        "raw": raw_message,
+                                        "threadId": email_request.thread_id,
+                                    },
+                                )
+                                .execute()
+                            )
+
+                            print(
+                                f"Sent using Gmail direct approach with explicit threadId"
+                            )
+                            print(
+                                f"Thread ID in response: {sent_message.get('threadId')}"
+                            )
+
                             return {
-                                "message_id": sent_message.get('id'),
-                                "thread_id": sent_message.get('threadId'),
-                                "success": True
+                                "message_id": sent_message.get("id"),
+                                "thread_id": sent_message.get("threadId"),
+                                "success": True,
                             }
                         except Exception as direct_send_error:
-                            print(f"Error with direct send method: {str(direct_send_error)}")
+                            print(
+                                f"Error with direct send method: {str(direct_send_error)}"
+                            )
                             raise direct_send_error
                     except Exception as draft_error:
                         print(f"Error creating draft reply: {str(draft_error)}")
-                
+
                 # ==========================================
                 # APPROACH 2: Create a reply using completely new method
                 # ==========================================
-                
+
                 # Create a completely new format with all required headers but use Gmail's JSON format
-                message_json = {
-                    'raw': '',
-                    'threadId': email_request.thread_id
-                }
-                
+                message_json = {"raw": "", "threadId": email_request.thread_id}
+
                 # Create the email in RFC822 format
                 if email_request.html:
-                    mime_subtype = 'html'
+                    mime_subtype = "html"
                 else:
-                    mime_subtype = 'plain'
-                
+                    mime_subtype = "plain"
+
                 # Create a message object
                 message = MIMEMultipart()
-                message['to'] = ', '.join(email_request.to)
-                message['from'] = user.email
-                message['subject'] = email_request.subject
-                
+                message["to"] = ", ".join(email_request.to)
+                message["from"] = user.email
+                message["subject"] = email_request.subject
+
                 # Critical: Set reply headers
                 if original_message_id:
-                    message['In-Reply-To'] = original_message_id
-                    message['References'] = original_message_id
-                
+                    message["In-Reply-To"] = original_message_id
+                    message["References"] = original_message_id
+
                 # Add the body
                 message.attach(MIMEText(body_content, mime_subtype))
-                
+
                 # Encode as needed by Gmail API
                 raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-                message_json['raw'] = raw
-                
+                message_json["raw"] = raw
+
                 # Send the message with explicit threadId
-                sent_message = service.users().messages().send(
-                    userId='me',
-                    body=message_json
-                ).execute()
-                
-                print(f"Sent message using standard method with explicit threadId setting")
+                sent_message = (
+                    service.users()
+                    .messages()
+                    .send(userId="me", body=message_json)
+                    .execute()
+                )
+
+                print(
+                    f"Sent message using standard method with explicit threadId setting"
+                )
                 print(f"Thread ID: {sent_message.get('threadId')}")
-                
+
                 return {
                     "message_id": sent_message["id"],
                     "thread_id": sent_message["threadId"],
                     "success": True,
                 }
-                
+
             except Exception as reply_error:
                 print(f"Error with reply methods: {str(reply_error)}")
                 print("Falling back to standard MIME message method")
                 # Fall back to the standard method if direct API method fails
-        
+
         # Standard method for new emails or if direct reply failed
         # Create a proper MIME message
         if email_request.html:
@@ -715,7 +838,7 @@ def send_email(
         if email_request.thread_id:
             # Get the actual message ID from the thread data if possible
             thread_message_id = original_message_id  # Use the one we already retrieved
-            
+
             if not thread_message_id:
                 try:
                     # Try to get the original message details to get correct Message-ID
@@ -726,7 +849,7 @@ def send_email(
                             if header["name"].lower() == "message-id":
                                 thread_message_id = header["value"]
                                 break
-                                
+
                         # If not found, try the first message in the thread
                         if not thread_message_id:
                             first_message = thread_data["messages"][0]
@@ -737,31 +860,33 @@ def send_email(
                 except Exception as e:
                     print(f"Error getting original message ID: {str(e)}")
                     # Fall back to default ID format if we can't get the real one
-                    
+
             # If we couldn't get the real Message-ID, create a properly formatted one
             if not thread_message_id:
                 thread_message_id = f"<{email_request.thread_id}@mail.gmail.com>"
-                
+
             # Set Message-ID for this email - make it unique and correctly formatted
-            unique_id = f"{email_request.thread_id}-{int(time.time())}-{os.urandom(4).hex()}"
+            unique_id = (
+                f"{email_request.thread_id}-{int(time.time())}-{os.urandom(4).hex()}"
+            )
             message["Message-ID"] = f"<reply-{unique_id}@{user.email.split('@')[1]}>"
-            
+
             # Set In-Reply-To header to reference the original message
             message["In-Reply-To"] = thread_message_id
-            
+
             # Set References to include both the original message ID and any previous references
             references = []
             if email_request.references:
                 references.extend(email_request.references)
             if thread_message_id not in references:
                 references.append(thread_message_id)
-                
+
             message["References"] = " ".join(references)
-        
+
         # Add Gmail-specific threading header
         if email_request.thread_id:
             message["X-GM-THRID"] = email_request.thread_id
-            
+
         # Encode message properly using base64url encoding
         encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
 
@@ -872,9 +997,55 @@ def process_email_metadata(message, headers, user_id, db):
                 has_attachment = True
                 break
 
+    # Extract the full message content
+    full_content = ""
+    try:
+        payload = message.get("payload", {})
+        # Handle single-part messages (no parts)
+        if "body" in payload and "data" in payload["body"]:
+            body_data = payload["body"]["data"]
+            body_bytes = base64.urlsafe_b64decode(
+                body_data + "=" * (4 - len(body_data) % 4)
+            )
+            full_content = body_bytes.decode("utf-8", errors="replace")
+        # Handle multi-part messages (with parts)
+        elif "parts" in payload:
+            for part in payload["parts"]:
+                mime_type = part.get("mimeType", "")
+                # Process text parts
+                if mime_type.startswith("text/"):
+                    if "body" in part and "data" in part["body"]:
+                        part_data = part["body"]["data"]
+                        part_bytes = base64.urlsafe_b64decode(
+                            part_data + "=" * (4 - len(part_data) % 4)
+                        )
+                        part_content = part_bytes.decode("utf-8", errors="replace")
+                        full_content += part_content + "\n\n"
+                # Process nested parts
+                elif "parts" in part:
+                    for nested_part in part["parts"]:
+                        if "body" in nested_part and "data" in nested_part["body"]:
+                            nested_data = nested_part["body"]["data"]
+                            nested_bytes = base64.urlsafe_b64decode(
+                                nested_data + "=" * (4 - len(nested_data) % 4)
+                            )
+                            nested_content = nested_bytes.decode(
+                                "utf-8", errors="replace"
+                            )
+                            full_content += nested_content + "\n\n"
+
+        # If we couldn't extract content, use the snippet
+        if not full_content.strip():
+            full_content = snippet
+    except Exception as e:
+        print(f"Error extracting full email content: {str(e)}")
+        full_content = snippet  # Fallback to snippet
+
     # Check if the email already exists in the database
     email = (
-        db.query(Email).filter(Email.gmail_id == message_id, Email.user_id == user_id).first()
+        db.query(Email)
+        .filter(Email.gmail_id == message_id, Email.user_id == user_id)
+        .first()
     )
 
     if not email:
@@ -891,6 +1062,7 @@ def process_email_metadata(message, headers, user_id, db):
             labels=labels,
             has_attachment=has_attachment,
             is_read="UNREAD" not in labels,
+            full_content=full_content,
         )
         db.add(email)
         print(f"Created new email metadata for message {message_id}")
@@ -906,6 +1078,7 @@ def process_email_metadata(message, headers, user_id, db):
         email.has_attachment = has_attachment
         email.is_read = "UNREAD" not in labels
         email.updated_at = datetime.now()
+        email.full_content = full_content
         print(f"Updated existing email metadata for message {message_id}")
 
     # Commit the changes
@@ -989,8 +1162,12 @@ def index_all_threads(
         existing_thread_ids = set()
         if not is_initial_indexing:
             existing_emails = db.query(Email).filter(Email.user_id == user.id).all()
-            existing_thread_ids = {email.thread_id for email in existing_emails if email.thread_id}
-            print(f"Found {len(existing_thread_ids)} existing thread IDs in the database")
+            existing_thread_ids = {
+                email.thread_id for email in existing_emails if email.thread_id
+            }
+            print(
+                f"Found {len(existing_thread_ids)} existing thread IDs in the database"
+            )
 
         # Log the indexing limit
         print(f"Indexing up to {max_threads} threads for user {user.email}")
@@ -1014,7 +1191,9 @@ def index_all_threads(
         results = (
             service.users()
             .threads()
-            .list(userId="me", maxResults=100)  # Always request more threads to account for filtering
+            .list(
+                userId="me", maxResults=100
+            )  # Always request more threads to account for filtering
             .execute()
         )
         threads = results.get("threads", [])
@@ -1038,11 +1217,13 @@ def index_all_threads(
         # Filter threads for processing - for initial indexing, limit to max_threads
         # For regular sync, process all new threads not already in the database
         threads_to_process = []
-        
+
         if is_initial_indexing:
             # For initial indexing, limit to max_threads
             threads_to_process = threads[:max_threads]
-            print(f"Initial indexing: Processing {len(threads_to_process)} threads (limited by max_threads={max_threads})")
+            print(
+                f"Initial indexing: Processing {len(threads_to_process)} threads (limited by max_threads={max_threads})"
+            )
         else:
             # For regular sync, process all new threads
             for thread in threads:
@@ -1448,33 +1629,46 @@ class EmailService:
     This provides backward compatibility for code expecting an EmailService class.
     All methods directly delegate to the corresponding standalone functions.
     """
-    
+
     def __init__(self):
         pass
-        
+
     def get_gmail_service(self, credentials):
         return get_gmail_service(credentials)
-        
+
     def build_gmail_service(self, credentials):
         return build_gmail_service(credentials)
-    
-    def list_messages(self, user=None, db=None, max_results=20, q=None, label_ids=None, page=1, use_cache=True):
+
+    def list_messages(
+        self,
+        user=None,
+        db=None,
+        max_results=20,
+        q=None,
+        label_ids=None,
+        page=1,
+        use_cache=True,
+    ):
         return list_messages(user, db, max_results, q, label_ids, page, use_cache)
-    
+
     def get_thread(self, thread_id, user=None, db=None, store_embedding=False):
         return get_thread(thread_id, user, db, store_embedding)
-    
+
     def send_email(self, email_request, user=None, db=None):
         return send_email(email_request, user, db)
-    
+
     def process_email_metadata(self, message, headers, user_id, db):
         return process_email_metadata(message, headers, user_id, db)
-    
-    def search_similar_threads(self, query, user=None, db=None, top_k=10, filter_category=None):
+
+    def search_similar_threads(
+        self, query, user=None, db=None, top_k=10, filter_category=None
+    ):
         return search_similar_threads(query, user, db, top_k, filter_category)
-    
-    def index_all_threads(self, user=None, db=None, max_threads=None, is_initial_indexing=False):
+
+    def index_all_threads(
+        self, user=None, db=None, max_threads=None, is_initial_indexing=False
+    ):
         return index_all_threads(user, db, max_threads, is_initial_indexing)
-    
+
     def index_thread(self, thread_id, user=None, db=None):
         return index_thread(thread_id, user, db)

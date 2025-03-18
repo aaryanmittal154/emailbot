@@ -33,9 +33,11 @@ class EmailMetadata(Base):
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+    full_content = Column(Text, nullable=True)  # Full email content
 
     # Relationships
     user = relationship("User", backref="emails")
+
 
 # For backward compatibility
 Email = EmailMetadata
