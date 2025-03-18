@@ -414,10 +414,17 @@ export const getMatchHistory = async (
   });
 };
 
-// Onboarding
+// User-related API calls
+export const getCurrentUser = async () => {
+  console.log("Calling getCurrentUser API");
+  return api.get("/api/auth/me");
+};
+
+// Onboarding-related API calls
 export const setOnboardingPreferences = (preferences: {
   max_emails_to_index: number;
 }) => {
+  console.log("Calling onboarding API with preferences:", preferences);
   return api.post("/api/auth/onboarding", preferences);
 };
 

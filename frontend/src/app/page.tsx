@@ -15,7 +15,7 @@ import Footer from "../components/homepage/Footer";
 
 export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
-  const toast  l= useToast();
+  const toast = useToast();
   const { isOpen, onOpen, onClose } = useDisclosure();
 
   // Handle Google login

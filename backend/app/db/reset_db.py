@@ -3,6 +3,7 @@
 import logging
 from sqlalchemy.orm import Session
 from app.db.database import Base, engine
+from sqlalchemy import inspect, text
 
 # Import all models to ensure they're properly registered
 from app.models.user import User
@@ -18,7 +19,16 @@ logger = logging.getLogger(__name__)
 def reset_db():
     """Drop all tables and recreate them"""
     logger.info("Dropping all tables...")
-    Base.metadata.drop_all(bind=engine)
+
+    # Updated to use drop_all with cascade to handle dependent objects
+    inspector = inspect(engine)
+    tables = inspector.get_table_names()
+
+    with engine.begin() as conn:
+        # Create a raw SQL statement to drop all tables with CASCADE
+        for table in tables:
+            logger.info(f"Dropping table {table} with CASCADE...")
+            conn.execute(text(f"DROP TABLE IF EXISTS {table} CASCADE"))
 
     logger.info("Creating all tables...")
     Base.metadata.create_all(bind=engine)
