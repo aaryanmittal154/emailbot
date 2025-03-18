@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState } from "react";
 import {
   Box,
   Flex,
@@ -11,20 +11,22 @@ import {
   useColorModeValue,
   Icon,
   LinkBox,
-  LinkOverlay
-} from '@chakra-ui/react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronRightIcon, TimeIcon, RepeatIcon } from '@chakra-ui/icons';
-import { EmailCard } from './EmailCard';
+  LinkOverlay,
+} from "@chakra-ui/react";
+import { motion, AnimatePresence } from "framer-motion";
+import { ChevronRightIcon, TimeIcon, RepeatIcon } from "@chakra-ui/icons";
+import { EmailCard } from "./EmailCard";
 
 interface Email {
   id: string;
   thread_id: string;
   subject: string;
-  sender: {
-    name: string;
-    email: string;
-  } | string;
+  sender:
+    | {
+        name: string;
+        email: string;
+      }
+    | string;
   recipients: string[];
   snippet?: string;
   preview?: string;
@@ -61,72 +63,83 @@ const CategoryPanel: React.FC<CategoryPanelProps> = ({
   onEmailSelect,
   emptyMessage = "No emails in this category",
   badgeCount,
-  animation = "fadeIn"
+  animation = "fadeIn",
 }) => {
   const [isHovered, setIsHovered] = useState(false);
-  const bgColor = useColorModeValue('white', 'gray.800');
-  const borderColor = useColorModeValue('gray.200', 'gray.700');
-  const headerBgColor = useColorModeValue('gray.50', 'gray.900');
-  
+  const bgColor = useColorModeValue("white", "gray.800");
+  const borderColor = useColorModeValue("gray.200", "gray.700");
+  const headerBgColor = useColorModeValue("gray.50", "gray.900");
+
+  // Add debugging for emails array
+  useEffect(() => {
+    if (!emails || !Array.isArray(emails)) {
+      console.error(`[${category}] Invalid emails array:`, emails);
+    } else if (emails.length === 0) {
+      console.log(`[${category}] Empty emails array, showing empty state`);
+    } else {
+      console.log(`[${category}] Rendering ${emails.length} emails`);
+    }
+  }, [emails, category]);
+
   // Get animation variants based on animation type
   const getAnimationVariants = () => {
-    switch(animation) {
+    switch (animation) {
       case "fadeIn":
         return {
           hidden: { opacity: 0 },
-          visible: { 
+          visible: {
             opacity: 1,
-            transition: { 
+            transition: {
               duration: 0.5,
-              staggerChildren: 0.1
-            }
-          }
+              staggerChildren: 0.1,
+            },
+          },
         };
       case "slideUp":
         return {
           hidden: { opacity: 0, y: 20 },
-          visible: { 
-            opacity: 1, 
+          visible: {
+            opacity: 1,
             y: 0,
-            transition: { 
+            transition: {
               duration: 0.4,
-              staggerChildren: 0.1
-            }
-          }
+              staggerChildren: 0.1,
+            },
+          },
         };
       case "scale":
         return {
           hidden: { opacity: 0, scale: 0.8 },
-          visible: { 
-            opacity: 1, 
+          visible: {
+            opacity: 1,
             scale: 1,
-            transition: { 
+            transition: {
               duration: 0.3,
-              staggerChildren: 0.1
-            }
-          }
+              staggerChildren: 0.1,
+            },
+          },
         };
       default:
         return {
           hidden: {},
-          visible: {}
+          visible: {},
         };
     }
   };
 
   // Get category color
   const getCategoryColor = (category: string) => {
-    const categoryColors: {[key: string]: string} = {
-      'Job Posting': 'blue',
-      'Candidate': 'green',
-      'Event': 'purple',
-      'Questions': 'orange',
-      'Discussion Topics': 'teal',
-      'Other': 'gray',
-      'All Emails': 'brand'
+    const categoryColors: { [key: string]: string } = {
+      "Job Posting": "blue",
+      Candidate: "green",
+      Event: "purple",
+      Questions: "orange",
+      "Discussion Topics": "teal",
+      Other: "gray",
+      "All Emails": "brand",
     };
-    
-    return categoryColors[category] || 'gray';
+
+    return categoryColors[category] || "gray";
   };
 
   const colorScheme = getCategoryColor(category);
@@ -135,13 +148,13 @@ const CategoryPanel: React.FC<CategoryPanelProps> = ({
   const containerVariants = getAnimationVariants();
   const itemVariants = {
     hidden: { opacity: 0, y: 10 },
-    visible: { 
-      opacity: 1, 
+    visible: {
+      opacity: 1,
       y: 0,
-      transition: { duration: 0.3 }
-    }
+      transition: { duration: 0.3 },
+    },
   };
-  
+
   return (
     <MotionBox
       initial="hidden"
@@ -161,7 +174,7 @@ const CategoryPanel: React.FC<CategoryPanelProps> = ({
       flexDirection="column"
     >
       {/* Header */}
-      <Flex 
+      <Flex
         p={4}
         align="center"
         justify="space-between"
@@ -170,10 +183,12 @@ const CategoryPanel: React.FC<CategoryPanelProps> = ({
         bg={headerBgColor}
       >
         <Flex align="center">
-          <Heading size="md" fontWeight="semibold">{title}</Heading>
+          <Heading size="md" fontWeight="semibold">
+            {title}
+          </Heading>
           {badgeCount !== undefined && badgeCount > 0 && (
-            <Badge 
-              ml={2} 
+            <Badge
+              ml={2}
               colorScheme={colorScheme}
               borderRadius="full"
               px={2}
@@ -183,7 +198,7 @@ const CategoryPanel: React.FC<CategoryPanelProps> = ({
             </Badge>
           )}
         </Flex>
-        <Button 
+        <Button
           size="sm"
           leftIcon={<RepeatIcon />}
           onClick={onRefresh}
@@ -196,22 +211,22 @@ const CategoryPanel: React.FC<CategoryPanelProps> = ({
           Refresh
         </Button>
       </Flex>
-      
+
       {/* Content */}
-      <Box 
+      <Box
         flex="1"
         p={4}
         overflowY="auto"
         css={{
-          '&::-webkit-scrollbar': {
-            width: '4px',
+          "&::-webkit-scrollbar": {
+            width: "4px",
           },
-          '&::-webkit-scrollbar-track': {
-            width: '6px',
+          "&::-webkit-scrollbar-track": {
+            width: "6px",
           },
-          '&::-webkit-scrollbar-thumb': {
-            background: '#cbd5e0',
-            borderRadius: '24px',
+          "&::-webkit-scrollbar-thumb": {
+            background: "#cbd5e0",
+            borderRadius: "24px",
           },
         }}
       >
@@ -228,28 +243,39 @@ const CategoryPanel: React.FC<CategoryPanelProps> = ({
             <VStack spacing={4} align="stretch">
               {emails.map((email) => {
                 // Handle both modern and classic email formats
-                const senderObject = typeof email.sender === 'object' 
-                  ? email.sender 
-                  : {
-                      name: typeof email.sender === 'string' && email.sender.includes('<') 
-                        ? email.sender.split('<')[0].trim() 
-                        : (typeof email.sender === 'string' ? email.sender.split('@')[0] : 'Unknown'),
-                      email: typeof email.sender === 'string' && email.sender.includes('<') 
-                        ? email.sender.match(/<([^>]+)>/)![1] 
-                        : (typeof email.sender === 'string' ? email.sender : 'unknown@example.com')
-                    };
-                
+                const senderObject =
+                  typeof email.sender === "object"
+                    ? email.sender
+                    : {
+                        name:
+                          typeof email.sender === "string" &&
+                          email.sender.includes("<")
+                            ? email.sender.split("<")[0].trim()
+                            : typeof email.sender === "string"
+                            ? email.sender.split("@")[0]
+                            : "Unknown",
+                        email:
+                          typeof email.sender === "string" &&
+                          email.sender.includes("<")
+                            ? email.sender.match(/<([^>]+)>/)![1]
+                            : typeof email.sender === "string"
+                            ? email.sender
+                            : "unknown@example.com",
+                      };
+
                 return (
                   <MotionBox key={email.id} variants={itemVariants}>
-                    <EmailCard 
+                    <EmailCard
                       id={email.id}
                       thread_id={email.thread_id}
                       subject={email.subject}
                       sender={senderObject}
-                      preview={email.snippet || email.preview || ''}
-                      timestamp={email.date || email.timestamp || ''}
+                      preview={email.snippet || email.preview || ""}
+                      timestamp={email.date || email.timestamp || ""}
                       isRead={email.is_read || email.isRead || false}
-                      hasAttachment={email.has_attachment || email.hasAttachment || false}
+                      hasAttachment={
+                        email.has_attachment || email.hasAttachment || false
+                      }
                       labels={email.labels || []}
                       category={category}
                       onClick={() => onEmailSelect(email)}
@@ -259,9 +285,9 @@ const CategoryPanel: React.FC<CategoryPanelProps> = ({
               })}
             </VStack>
           ) : (
-            <Flex 
-              direction="column" 
-              align="center" 
+            <Flex
+              direction="column"
+              align="center"
               justify="center"
               height="200px"
               color="gray.500"

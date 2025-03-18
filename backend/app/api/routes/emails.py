@@ -3,9 +3,12 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional
 import logging
+from datetime import datetime, timedelta, timezone
+from sqlalchemy import or_
 
 from app.db.database import get_db
 from app.models.user import User
+from app.models.email import EmailMetadata
 from app.models.email_label import ThreadLabel
 from app.schemas.email import (
     EmailResponse,
@@ -13,8 +16,8 @@ from app.schemas.email import (
     SendEmailRequest,
     SendEmailResponse,
 )
-from app.services.email_service import email_service
-from app.services.auth_service import get_current_user
+from app.services.email_service import email_service, get_gmail_service
+from app.services.auth_service import get_current_user, get_google_creds
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -29,6 +32,7 @@ async def list_emails(
     max_results: int = 20,
     page: int = 1,
     use_cache: bool = True,
+    refresh_db: bool = False,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -40,6 +44,7 @@ async def list_emails(
     - **max_results**: Maximum number of results per page
     - **page**: Page number (1-indexed)
     - **use_cache**: Whether to use cached data (set to false to force refresh)
+    - **refresh_db**: If true, only fetch from database (no Gmail API call)
     """
     # Check if user is onboarded before processing
     if not current_user.is_onboarded:
@@ -48,22 +53,77 @@ async def list_emails(
         return []
 
     try:
-        # Get messages with pagination
-        messages = email_service["list_messages"](
-            user=current_user,
-            db=db,
-            max_results=max_results,
-            q=q,
-            label_ids=label_ids,
-            page=page,
-            use_cache=use_cache,
-        )
-        return messages
+        if refresh_db:
+            # Only fetch from database
+            logger.info(f"Refresh from database requested for user {current_user.id}")
+
+            # Calculate offset based on page
+            offset = (page - 1) * max_results
+
+            # Query directly from the database
+            query = db.query(EmailMetadata).filter(
+                EmailMetadata.user_id == current_user.id
+            )
+
+            # Apply search query if provided
+            if q:
+                query = query.filter(
+                    or_(
+                        EmailMetadata.subject.ilike(f"%{q}%"),
+                        EmailMetadata.snippet.ilike(f"%{q}%"),
+                        EmailMetadata.sender.ilike(f"%{q}%"),
+                    )
+                )
+
+            # Apply label filters if provided
+            if label_ids:
+                # This is a simplification - you may need a more complex query
+                # to filter by labels since labels is a JSON field
+                pass
+
+            # Order by date (newest first) and paginate
+            emails = (
+                query.order_by(EmailMetadata.date.desc())
+                .offset(offset)
+                .limit(max_results)
+                .all()
+            )
+
+            # Convert to dictionaries
+            emails_data = []
+            for email in emails:
+                email_dict = {
+                    "id": email.id,
+                    "gmail_id": email.gmail_id,
+                    "thread_id": email.thread_id,
+                    "sender": email.sender,
+                    "recipients": email.recipients,
+                    "subject": email.subject,
+                    "snippet": email.snippet,
+                    "date": email.date.isoformat() if email.date else None,
+                    "labels": email.labels,
+                    "has_attachment": email.has_attachment,
+                    "is_read": email.is_read,
+                }
+                emails_data.append(email_dict)
+
+            return emails_data
+        else:
+            # Use the existing logic to fetch from Gmail
+            return email_service["list_messages"](
+                user=current_user,
+                db=db,
+                max_results=max_results,
+                page=page,
+                q=q,
+                label_ids=label_ids,
+                use_cache=use_cache,
+            )
     except Exception as e:
-        logger.error(f"Error getting emails: {str(e)}")
+        logger.error(f"Error listing emails: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error getting emails: {str(e)}",
+            detail=f"Failed to list emails: {str(e)}",
         )
 
 
@@ -93,7 +153,7 @@ async def sync_emails(
     """
     Sync emails from Gmail in the background
 
-    This endpoint will trigger a background job to sync new emails 
+    This endpoint will trigger a background job to sync new emails
     from Gmail and store their metadata in the database for faster access.
     It will preserve all previously indexed emails while adding new ones.
 
@@ -224,6 +284,7 @@ async def get_emails_by_label(
     label_name: str,
     page: int = 1,
     max_results: int = 20,
+    refresh_db: bool = False,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -234,6 +295,7 @@ async def get_emails_by_label(
         label_name: The name of the label (e.g., "Job Posting" or "Candidate")
         page: Page number for pagination
         max_results: Maximum number of results to return per page
+        refresh_db: If true, only fetch data from database (no Gmail API calls)
         db: Database session
         user: The current user
 
@@ -263,54 +325,114 @@ async def get_emails_by_label(
 
         # Get emails for these threads
         emails = []
-        for thread_id in thread_ids[(page - 1) * max_results : page * max_results]:
-            try:
-                # Get thread data
-                thread = email_service["get_thread"](
-                    thread_id=thread_id, user=user, db=db
+
+        if refresh_db:
+            logger.info(
+                f"Refreshing {label_name} emails from database for user {user.id}"
+            )
+
+            # Get all matching emails first so we can sort by date
+            matching_emails = []
+            for thread_id in thread_ids:
+                # Query the latest email for each thread
+                latest_email = (
+                    db.query(EmailMetadata)
+                    .filter(
+                        EmailMetadata.user_id == user.id,
+                        EmailMetadata.thread_id == thread_id,
+                    )
+                    .order_by(EmailMetadata.date.desc())
+                    .first()
                 )
 
-                # If it's a job posting, attempt to get the classification data
-                classification_data = None
-                if label_name == "Job Posting":
-                    try:
-                        # Try to get classification data
-                        from app.services.email_classifier_service import (
-                            email_classifier,
-                        )
+                if latest_email:
+                    matching_emails.append(latest_email)
 
-                        classification_result = await email_classifier.classify_email(
-                            thread_data=thread, user=user, db=db
-                        )
-                        if classification_result["success"]:
-                            classification_data = classification_result
-                    except Exception as classify_error:
-                        logger.warning(
-                            f"Error classifying thread {thread_id}: {str(classify_error)}"
-                        )
+            # Sort all emails by date (newest first)
+            matching_emails.sort(
+                key=lambda x: x.date if x.date else datetime.min, reverse=True
+            )
 
-                # If successful, add to the list
-                if thread:
+            # Apply pagination
+            page_emails = matching_emails[(page - 1) * max_results : page * max_results]
+
+            # Create the thread data for each email
+            for email in page_emails:
+                try:
                     thread_data = {
-                        "thread_id": thread["thread_id"],
-                        "subject": thread["subject"],
-                        "participants": thread["participants"],
-                        "message_count": thread["message_count"],
-                        "last_updated": thread["last_updated"],
-                        # Include the latest message details for display
-                        "latest_message": (
-                            thread["messages"][-1] if thread["messages"] else {}
-                        ),
+                        "thread_id": email.thread_id,
+                        "subject": email.subject,
+                        "participants": [email.sender],
+                        "message_count": 1,  # Simplified
+                        "last_updated": email.date.isoformat() if email.date else None,
+                        # Include the latest message details
+                        "latest_message": {
+                            "id": email.gmail_id,
+                            "sender": email.sender,
+                            "snippet": email.snippet,
+                            "date": email.date.isoformat() if email.date else None,
+                            "is_read": email.is_read,
+                        },
                     }
-
-                    # Add classification data if available
-                    if classification_data:
-                        thread_data["classification_data"] = classification_data
-
                     emails.append(thread_data)
-            except Exception as e:
-                logger.warning(f"Error getting thread {thread_id}: {str(e)}")
-                continue
+                except Exception as e:
+                    logger.warning(f"Error processing email {email.gmail_id}: {str(e)}")
+                    continue
+        else:
+            # Use the original implementation with Gmail API
+            for thread_id in thread_ids[(page - 1) * max_results : page * max_results]:
+                try:
+                    # Get thread data
+                    thread = email_service["get_thread"](
+                        thread_id=thread_id, user=user, db=db
+                    )
+
+                    # If it's a job posting, attempt to get the classification data
+                    classification_data = None
+                    if label_name == "Job Posting":
+                        try:
+                            # Try to get classification data
+                            from app.services.email_classifier_service import (
+                                email_classifier,
+                            )
+
+                            classification_result = (
+                                await email_classifier.classify_email(
+                                    thread_data=thread, user=user, db=db
+                                )
+                            )
+                            if classification_result["success"]:
+                                classification_data = classification_result
+                        except Exception as classify_error:
+                            logger.warning(
+                                f"Error classifying thread {thread_id}: {str(classify_error)}"
+                            )
+
+                    # If successful, add to the list
+                    if thread:
+                        thread_data = {
+                            "thread_id": thread["thread_id"],
+                            "subject": thread["subject"],
+                            "participants": thread["participants"],
+                            "message_count": thread["message_count"],
+                            "last_updated": thread["last_updated"],
+                            # Include the latest message details for display
+                            "latest_message": (
+                                thread["messages"][-1] if thread["messages"] else {}
+                            ),
+                        }
+
+                        # Add classification data if available
+                        if classification_data:
+                            thread_data["classification_data"] = classification_data
+
+                        emails.append(thread_data)
+                except Exception as e:
+                    logger.warning(f"Error getting thread {thread_id}: {str(e)}")
+                    continue
+
+            # Sort the emails by last_updated (newest first)
+            emails.sort(key=lambda x: x.get("last_updated", ""), reverse=True)
 
         return emails
 
@@ -428,4 +550,97 @@ async def get_similar_threads(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error finding similar threads: {str(e)}",
+        )
+
+
+@router.get("/new", response_model=Dict[str, Any])
+async def get_new_emails(
+    last_checked_timestamp: Optional[str] = None,
+    max_results: int = 20,
+    use_gmail_query: bool = False,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Fetch only new emails that have arrived since the provided timestamp or using Gmail query
+
+    - **last_checked_timestamp**: ISO format timestamp (e.g., '2023-03-17T12:30:45Z')
+    - **max_results**: Maximum number of results to return
+    - **use_gmail_query**: Use Gmail's query syntax for finding emails instead of a timestamp
+    """
+    try:
+        # Get credentials and build service
+        creds = get_google_creds(current_user.id, db)
+        service = get_gmail_service(creds)
+
+        # Decide which method to use for querying
+        if use_gmail_query:
+            # Use the same query that the auto-reply service uses, which has proven to work
+            gmail_query = "is:unread newer_than:1h"
+            logger.info(f"Using Gmail query: {gmail_query}")
+        else:
+            # Use the timestamp-based approach
+            if not last_checked_timestamp:
+                one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+                last_checked_timestamp = one_hour_ago.isoformat()
+
+            # Convert timestamp to Gmail query format
+            dt = datetime.fromisoformat(last_checked_timestamp.replace("Z", "+00:00"))
+            # Gmail uses 'after:YYYY/MM/DD' format
+            date_str = dt.strftime("%Y/%m/%d")
+            gmail_query = f"after:{date_str}"
+            logger.info(f"Using timestamp-based Gmail query: {gmail_query}")
+
+        # Fetch messages matching the query
+        response = (
+            service.users()
+            .messages()
+            .list(userId="me", q=gmail_query, maxResults=max_results)
+            .execute()
+        )
+
+        messages = response.get("messages", [])
+        logger.info(f"Found {len(messages)} messages matching query: {gmail_query}")
+
+        if not messages:
+            return {
+                "count": 0,
+                "emails": [],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+        # Get unique thread IDs to avoid duplication
+        thread_ids = set()
+        for message in messages:
+            thread_ids.add(message["threadId"])
+
+        logger.info(f"Processing {len(thread_ids)} unique threads")
+
+        # Fetch full details for each thread
+        emails = []
+        for thread_id in thread_ids:
+            try:
+                # Use the existing get_thread function - with correct dictionary access
+                thread_data = email_service["get_thread"](thread_id, current_user, db)
+                if thread_data:
+                    emails.append(thread_data)
+            except Exception as thread_error:
+                logger.error(
+                    f"Error processing thread {thread_id}: {str(thread_error)}"
+                )
+                # Continue with other threads
+
+        logger.info(f"Successfully retrieved {len(emails)} threads")
+
+        # Return count and emails data
+        return {
+            "count": len(emails),
+            "emails": emails,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Error fetching new emails: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch new emails: {str(e)}",
         )

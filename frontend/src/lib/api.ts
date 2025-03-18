@@ -231,28 +231,39 @@ export const addLabelFeedback = async (
 // New functions for the labeled emails
 export const getEmailsByLabel = async (
   labelName: string,
-  options: { page?: number; max_results?: number; limit?: number; t?: number } | number = {},
-  legacyMaxResults?: number
+  params: Record<string, any> = {}
 ) => {
-  // Handle both old-style and new-style parameter formats for backward compatibility
-  let params: any = {};
-  
-  if (typeof options === 'number') {
-    // Old style: page parameter
-    params.page = options;
-    params.max_results = legacyMaxResults || 20; // Default to 20 if not provided
-  } else {
-    // New style: options object
-    params = {
-      page: options.page || 1,
-      max_results: options.max_results || options.limit || 20,
-    };
-    
-    // Add any additional parameters like timestamp, but exclude ones we've already processed
-    if (options.t) params.t = options.t;
+  console.log(`API Call: getEmailsByLabel with labelName: "${labelName}"`);
+  try {
+    const response = await api.get(
+      `/api/emails/labeled/${encodeURIComponent(labelName)}`,
+      { params }
+    );
+    console.log(`API Response for ${labelName}:`, response.data);
+
+    // Add validation and detailed logging
+    if (!response.data) {
+      console.error(`Empty response data for label ${labelName}`);
+    } else if (Array.isArray(response.data)) {
+      console.log(
+        `Received array with ${response.data.length} emails for ${labelName}`
+      );
+    } else if (response.data.emails && Array.isArray(response.data.emails)) {
+      console.log(
+        `Received object with ${response.data.emails.length} emails for ${labelName}`
+      );
+    } else {
+      console.error(
+        `Unexpected response format for ${labelName}:`,
+        response.data
+      );
+    }
+
+    return response;
+  } catch (error) {
+    console.error(`Error fetching emails with label ${labelName}:`, error);
+    throw error;
   }
-  
-  return api.get(`/api/emails/labeled/${labelName}`, { params });
 };
 
 export const classifyThread = async (threadId: string) => {
@@ -300,8 +311,8 @@ export const getSimilarThreadsMultiCategory = async (
   return api.get("/api/emails/similar-multi", {
     params: {
       thread_id: threadId,
-      include_categories: includeCategories.join(','),
-      exclude_categories: excludeCategories.join(','),
+      include_categories: includeCategories.join(","),
+      exclude_categories: excludeCategories.join(","),
       top_k: topK,
       t: timestamp || Date.now(), // Add timestamp for cache-busting
     },
@@ -426,8 +437,110 @@ export const setupRealtimeNotifications = async () => {
  * @param redirectUri Where to redirect after successful authentication
  * @returns Google auth URL with proper scopes for offline access
  */
-export const getOfflineAccessUrl = (redirectUri: string = '/dashboard') => {
-  return `/api/auth/login?offline_access=true&redirect_uri=${encodeURIComponent(redirectUri)}`;
+export const getOfflineAccessUrl = (redirectUri: string = "/dashboard") => {
+  return `/api/auth/login?offline_access=true&redirect_uri=${encodeURIComponent(
+    redirectUri
+  )}`;
+};
+
+/**
+ * Fetches new emails that have arrived since the given timestamp
+ * @param lastCheckedTimestamp ISO format timestamp of last check (e.g., '2023-03-17T12:30:45Z')
+ * @param maxResults Maximum number of results to return
+ * @returns Promise with new emails data
+ */
+export const getNewEmails = async (
+  lastCheckedTimestamp?: string,
+  maxResults: number = 20,
+  useGmailQuery: boolean = true
+) => {
+  if (useGmailQuery) {
+    console.log("Fetching new emails using Gmail query syntax");
+  } else {
+    console.log(
+      `Fetching new emails since ${lastCheckedTimestamp || "last hour"}`
+    );
+  }
+
+  try {
+    // Add timestamp to avoid caching
+    const cacheBuster = new Date().getTime();
+
+    const response = await api.get("/api/emails/new", {
+      params: {
+        last_checked_timestamp: lastCheckedTimestamp,
+        max_results: maxResults,
+        use_gmail_query: useGmailQuery,
+        t: cacheBuster,
+      },
+    });
+
+    // Handle empty response properly
+    if (!response.data) {
+      console.log("No data returned from new emails endpoint");
+      return {
+        data: { count: 0, emails: [], timestamp: new Date().toISOString() },
+      };
+    }
+
+    console.log(`Found ${response.data.count || 0} new emails`);
+
+    // Ensure data format is consistent
+    if (!response.data.emails) {
+      response.data.emails = [];
+    }
+
+    if (!response.data.count) {
+      response.data.count = response.data.emails.length || 0;
+    }
+
+    if (!response.data.timestamp) {
+      response.data.timestamp = new Date().toISOString();
+    }
+
+    return response;
+  } catch (error) {
+    console.error("Error fetching new emails:", error);
+    // Return a valid response format even on error
+    return {
+      data: {
+        count: 0,
+        emails: [],
+        timestamp: new Date().toISOString(),
+        error: error.message || "Unknown error",
+      },
+    };
+  }
+};
+
+/**
+ * Refreshes emails by pulling the latest data from the database
+ * This leverages the background service's work without querying Gmail directly
+ * @param maxResults Maximum number of results to return
+ * @returns Promise with refreshed emails from database
+ */
+export const refreshEmailsFromDatabase = async (maxResults: number = 20) => {
+  console.log("Refreshing emails from database");
+  try {
+    // Add timestamp to avoid caching
+    const cacheBuster = new Date().getTime();
+
+    // Use the existing emails endpoint but with a refresh_db=true parameter
+    const response = await api.get("/api/emails", {
+      params: {
+        page: 1,
+        max_results: maxResults,
+        refresh_db: true, // Signal to pull from DB without Gmail API call
+        t: cacheBuster, // Cache buster
+      },
+    });
+
+    console.log(`Refreshed ${response.data?.length || 0} emails from database`);
+    return response;
+  } catch (error) {
+    console.error("Error refreshing emails from database:", error);
+    throw error;
+  }
 };
 
 export default api;
