@@ -1541,16 +1541,6 @@ export default function Dashboard() {
           />
         </Box>
 
-        {/* Add Label Suggestions Component */}
-        <Box p={4} shadow="md" borderWidth="1px" borderRadius="md" mb={4}>
-          <LabelSuggestions
-            threadId={selectedThread.thread_id}
-            onLabelApplied={() => {
-              // Refresh if needed
-            }}
-          />
-        </Box>
-
         {/* Add Label Manager Component */}
         <Box p={4} shadow="md" borderWidth="1px" borderRadius="md" mb={4}>
           <LabelManager />
@@ -2105,14 +2095,15 @@ export default function Dashboard() {
           </TabPanels>
         </Tabs>
 
-        {/* Content area - display thread or labeled email depending on what's selected */}
-        {selectedThread && !selectedLabeledEmail ? (
-          renderThreadView()
-        ) : selectedLabeledEmail ? (
-          renderLabeledEmailView()
-        ) : (
-          <Box>{/* Add semantic search input */}</Box>
-        )}
+        {/* Content area - only display thread if not already showing in a tab */}
+        {selectedThread &&
+        !selectedLabeledEmail &&
+        !(tabIndex === 1 && selectedThread.labels?.includes("Job Posting")) &&
+        !(tabIndex === 2 && selectedThread.labels?.includes("Candidate")) &&
+        !(tabIndex === 3 && selectedThread.labels?.includes("Questions")) &&
+        !(tabIndex === 4 && selectedThread.labels?.includes("Follow-up"))
+          ? renderThreadView()
+          : null}
       </Flex>
 
       {/* Indexing Progress Modal */}
