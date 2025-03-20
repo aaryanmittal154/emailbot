@@ -25,105 +25,78 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/emails", tags=["Emails"])
 
 
-@router.get("/", response_model=List[Dict[str, Any]])
-async def list_emails(
+@router.get("/", response_model=List[dict])
+async def list_messages(
     q: Optional[str] = None,
-    label_ids: Optional[List[str]] = Query(None),
-    max_results: int = 20,
+    label_ids: Optional[str] = None,
     page: int = 1,
-    use_cache: bool = True,
+    page_size: int = 20,
+    include_full_content: bool = False,
     refresh_db: bool = False,
-    current_user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    List emails from Gmail with pagination
+    List Gmail messages for a user with pagination
 
-    - **q**: Search query (same as Gmail search)
-    - **label_ids**: List of Gmail label IDs to filter by
-    - **max_results**: Maximum number of results per page
-    - **page**: Page number (1-indexed)
-    - **use_cache**: Whether to use cached data (set to false to force refresh)
-    - **refresh_db**: If true, only fetch from database (no Gmail API call)
+    - q: Optional search query
+    - label_ids: Optional comma-separated list of label IDs
+    - page: Page number (starting from 1)
+    - page_size: Number of results per page
+    - include_full_content: Whether to include full email content
+    - refresh_db: If true, only fetch data from database (no Gmail API calls)
     """
-    # Check if user is onboarded before processing
-    if not current_user.is_onboarded:
-        # Return empty list for users who haven't completed onboarding
-        # This prevents unnecessary Gmail API calls
+    print(
+        f"List messages request: q={q}, label_ids={label_ids}, page={page}, page_size={page_size}, refresh_db={refresh_db}"
+    )
+
+    # Return empty list for users who haven't completed onboarding
+    if (
+        not user.is_onboarded and not include_full_content
+    ):  # Allow fetching during onboarding if explicitly requested
+        print(f"User {user.email} has not completed onboarding yet")
         return []
 
     try:
-        if refresh_db:
-            # Only fetch from database
-            logger.info(f"Refresh from database requested for user {current_user.id}")
+        # Parse label_ids if provided
+        label_list = None
+        if label_ids:
+            label_list = label_ids.split(",")
 
-            # Calculate offset based on page
-            offset = (page - 1) * max_results
+        # Call the email service to list messages
+        emails = email_service["list_messages"](
+            user=user,
+            db=db,
+            max_results=page_size,
+            q=q,
+            label_ids=label_list,
+            page=page,
+            refresh_db=refresh_db,
+        )
 
-            # Query directly from the database
-            query = db.query(EmailMetadata).filter(
-                EmailMetadata.user_id == current_user.id
-            )
-
-            # Apply search query if provided
-            if q:
-                query = query.filter(
-                    or_(
-                        EmailMetadata.subject.ilike(f"%{q}%"),
-                        EmailMetadata.snippet.ilike(f"%{q}%"),
-                        EmailMetadata.sender.ilike(f"%{q}%"),
-                    )
-                )
-
-            # Apply label filters if provided
-            if label_ids:
-                # This is a simplification - you may need a more complex query
-                # to filter by labels since labels is a JSON field
-                pass
-
-            # Order by date (newest first) and paginate
-            emails = (
-                query.order_by(EmailMetadata.date.desc())
-                .offset(offset)
-                .limit(max_results)
-                .all()
-            )
-
-            # Convert to dictionaries
-            emails_data = []
+        # If full content is specifically requested, ensure it's included
+        if include_full_content:
+            # Add the full_content field to each email if not already included
             for email in emails:
-                email_dict = {
-                    "id": email.id,
-                    "gmail_id": email.gmail_id,
-                    "thread_id": email.thread_id,
-                    "sender": email.sender,
-                    "recipients": email.recipients,
-                    "subject": email.subject,
-                    "snippet": email.snippet,
-                    "date": email.date.isoformat() if email.date else None,
-                    "labels": email.labels,
-                    "has_attachment": email.has_attachment,
-                    "is_read": email.is_read,
-                }
-                emails_data.append(email_dict)
+                if "full_content" not in email or not email["full_content"]:
+                    # Fetch from database if not included
+                    db_email = (
+                        db.query(Email)
+                        .filter(
+                            Email.gmail_id == email["gmail_id"],
+                            Email.user_id == user.id,
+                        )
+                        .first()
+                    )
+                    if db_email and db_email.full_content:
+                        email["full_content"] = db_email.full_content
 
-            return emails_data
-        else:
-            # Use the existing logic to fetch from Gmail
-            return email_service["list_messages"](
-                user=current_user,
-                db=db,
-                max_results=max_results,
-                page=page,
-                q=q,
-                label_ids=label_ids,
-                use_cache=use_cache,
-            )
+        return emails
     except Exception as e:
-        logger.error(f"Error listing emails: {str(e)}")
+        print(f"Error listing messages: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list emails: {str(e)}",
+            detail=f"Error listing messages: {str(e)}",
         )
 
 

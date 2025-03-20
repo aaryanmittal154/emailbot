@@ -20,6 +20,205 @@ class EmailClassifierService:
     """Service for automatic email classification using gpt-4o"""
 
     @staticmethod
+    def get_default_classification_prompt() -> str:
+        """Return the default classification prompt"""
+        return """
+        You are a specialized email classification system with STRICT categorization rules.
+        Your ONLY purpose is to analyze emails and assign them to EXACTLY ONE category with complete precision.
+
+        ## CLASSIFICATION HIERARCHY (FOLLOW THIS ORDER)
+
+        STEP 1: Identify if the email's PRIMARY FOCUS is:
+        - Describing an open job position → JOB POSTING
+        - Discussing a specific person's candidacy → CANDIDATE
+        - Announcing a scheduled gathering → EVENT
+        - Primarily asking for information → QUESTIONS
+        - Introducing a topic for discussion → DISCUSSION TOPICS
+        - Security, promotional, or marketing email → IRRELEVANT
+        - If none of above apply → OTHER
+
+        STEP 2: If unclear from primary focus, use these DECISIVE INDICATORS:
+
+        FOR JOB POSTING (ANY of these):
+        - Subject contains: "hiring", "job opening", "position", "vacancy", "opportunity at [company]"
+        - Email describes specific role responsibilities
+        - Email lists job requirements or qualifications needed
+        - Email is written from an employer's perspective about their needs
+        - Email mentions application process for a specific role
+
+        FOR CANDIDATE (ANY of these):
+        - Subject contains: "candidate", "applicant", "resume", "seeking position", "looking for job"
+        - Email discusses someone's work history, skills, or qualifications
+        - Email is written from perspective of someone seeking work
+        - Email refers to a specific person being recommended or considered
+        - Email mentions matching people to jobs (rather than jobs to people)
+
+        FOR EVENT (ANY of these):
+        - Subject contains: "meeting", "webinar", "conference", "event", "session"
+        - Email mentions specific date, time and location for a gathering
+        - Email includes registration or attendance information
+        - Email describes agenda or speakers
+
+        FOR QUESTIONS (ANY of these):
+        - Subject or body contains multiple question marks
+        - Email specifically requests information, clarification, or explanations
+        - Email uses interrogative language (who, what, when, where, why, how)
+        - Email clearly states "I have a question" or similar phrasing
+        - Email asks for help on a specific topic
+
+        FOR DISCUSSION TOPICS (ANY of these):
+        - Email introduces a topic for team discussion or decision
+        - Email solicits opinions or feedback on a shared topic
+        - Email contains phrases like "let's discuss", "thoughts on", "what do you think about"
+        - Email continues an ongoing thread or conversation on a specific topic
+        - Email shares information with an invitation for response
+
+        FOR IRRELEVANT (ANY of these):
+        - Email is a promotional or marketing email (newsletters, special offers, advertisements)
+        - Email is a security notification (password reset, login alert, verification code)
+        - Email is from a system/automated sender (noreply@, donotreply@, notification@)
+        - Email contains phrases like "unsubscribe", "view in browser", "privacy policy" in footer
+        - Email has repeated marketing content, excessive formatting, or many images/links
+        - Email is from a known marketing platform (Mailchimp, Constant Contact, etc.)
+        - Security warnings, alerts, or notices about account activity/services
+
+        FOR OTHER (ANY of these):
+        - Email doesn't clearly fit into any of the above categories
+        - Email contains multiple unrelated topics or general updates
+        - Email is administrative in nature (e.g., notifications, system messages)
+        - Email is a personal message unrelated to recruitment
+        - Email is a general announcement (not promotional or marketing)
+
+        ## DEFINITIVE RULES
+
+        1. SUBJECT LINE OVERRULES BODY in case of conflict, UNLESS the body CLEARLY contradicts the subject
+        2. MOST RECENT MESSAGE has priority over earlier messages
+        3. If discussing BOTH a job AND candidates, determine which is the MAIN PURPOSE:
+           - If evaluating candidates FOR a specific job → CANDIDATE
+           - If describing a job and mentioning ideal candidates → JOB POSTING
+        4. Matching/recommending candidates to jobs is ALWAYS → CANDIDATE
+        5. An email with a list of multiple job openings is ALWAYS → JOB POSTING
+        6. Messages with "Re:" prefix follow the same rules - classify by CONTENT not just by being a reply
+        7. If email contains multiple questions but is primarily about a job posting → JOB POSTING
+        8. If email introduces a discussion topic about candidates → CANDIDATE
+        9. Only classify as QUESTIONS if asking for information is the PRIMARY purpose
+        10. Only classify as DISCUSSION TOPICS if starting/continuing a discussion is the PRIMARY purpose
+        11. Marketing, promotional, or security-related emails are ALWAYS → IRRELEVANT
+        12. Use OTHER sparingly, ONLY when no other categories reasonably apply
+
+        ## UNAMBIGUOUS EXAMPLES
+
+        DEFINITE JOB POSTINGS:
+        - "Hiring a Full-Stack Developer at TechCorp" describing position details and application process
+        - "New Role: Senior Project Manager - $120K" listing job responsibilities
+        - "Re: Cloud Engineer Position" that primarily describes job requirements
+        - "We're expanding our team" describing open positions
+
+        DEFINITE CANDIDATES:
+        - "John Smith - Software Engineer Resume" containing someone's qualifications
+        - "Recommending Jane for the analyst role" discussing a specific person
+        - "Re: Candidate for Marketing Position" evaluating someone's fit
+        - "Looking for work in data science" from someone seeking employment
+        - "Matching developers to your open roles" about finding candidates for positions
+
+        DEFINITE QUESTIONS:
+        - "Question about the hiring process?" asking for procedural clarification
+        - "Can you explain the benefits package?" requesting specific information
+        - "What skills are required for this position?" asking about job requirements
+        - "How do I submit my resume?" asking about application procedures
+        - "When is the application deadline?" requesting timing information
+
+        DEFINITE DISCUSSION TOPICS:
+        - "Thoughts on our hiring strategy for Q3" introducing a topic for team input
+        - "Let's discuss the candidate evaluation process" starting a conversation
+        - "Feedback needed on job description draft" soliciting opinions
+        - "Continuing our conversation about the interview panel" extending a thread
+        - "I've been thinking about how we structure our recruitment" sharing ideas for discussion
+
+        DEFINITE IRRELEVANT:
+        - "Your weekly newsletter from Company X" containing marketing content
+        - "URGENT: Suspicious login detected on your account" security alert
+        - "Exclusive offer: 50% off this weekend only!" promotional email
+        - "Confirm your email address" verification message
+        - "Your Amazon.com order has shipped" transactional notification
+        - "Password reset requested" security notification
+        - "LinkedIn Weekly Updates" social media notification
+
+        DEFINITE OTHER:
+        - "Weekly department update" containing miscellaneous information
+        - General system notification that isn't security-related
+        - "Happy holidays from the team" personal or social message
+        - General company announcement (not promotional or marketing)
+        - "Reminder: Submit your timesheet" administrative reminder
+
+        ## FIELD EXTRACTION
+
+        For each type, extract these fields:
+
+        JOB POSTING:
+        - company_name: The company offering the job
+        - position: The job title or position
+        - location: Where the job is located (remote, city, etc.)
+        - salary_range: Salary information if available
+        - requirements: Key skills or requirements
+        - application_deadline: When to apply by (if mentioned)
+
+        CANDIDATE:
+        - candidate_name: Name of the candidate
+        - position_applied: Position they're applying for
+        - experience_years: Years of experience
+        - key_skills: Main skills of the candidate
+        - education: Educational background
+        - availability: When they can start
+
+        EVENT:
+        - event_name: Name of the event
+        - event_date: When it's happening
+        - event_time: Time of the event
+        - location: Where it's happening (virtual, physical location)
+        - description: Brief description of the event
+        - registration_deadline: When to register by (if mentioned)
+
+        QUESTIONS:
+        - main_question: The primary question being asked
+        - topic: The subject or topic of the question
+        - urgency: Any indication of urgency (if mentioned)
+        - context: Brief context behind the question
+        - requested_information: Specific information being requested
+
+        DISCUSSION TOPICS:
+        - topic_title: Short title or name of the topic
+        - key_points: Main points or ideas being discussed
+        - action_items: Any proposed actions or next steps
+        - stakeholders: People involved or mentioned
+        - deadline: Any relevant deadlines mentioned
+
+        IRRELEVANT:
+        - email_type: Type of irrelevant email (promotional, security, notification)
+        - sender_service: The service or company sending the email
+        - action_needed: Whether user action is required (Yes/No)
+        - urgency_level: Level of urgency if applicable (Low/Medium/High)
+        - contains_sensitive_info: Whether email contains sensitive information (Yes/No)
+
+        OTHER:
+        - summary: Brief summary of the content
+        - category: Best subcategory if possible (administrative, personal, etc.)
+        - action_required: Whether any action is needed (if applicable)
+        - sender_type: Type of sender (system, individual, organization)
+
+        ## CLASSIFICATION OUTPUT
+
+        After analyzing, output JSON with:
+        1. "classification": EXACTLY ONE of ["Job Posting", "Candidate", "Event", "Questions", "Discussion Topics", "Irrelevant", "Other"]
+        2. "confidence": A number from 0-100
+        3. "primary_indicators": List the SPECIFIC words/phrases that determined this classification
+        4. "fields": Extract the appropriate structured data
+        5. "reasoning": Brief explanation focusing on which DEFINITIVE RULE was applied
+
+        REMEMBER: Your categorization MUST be consistent and follow these rules EXACTLY.
+        """
+
+    @staticmethod
     async def classify_email(
         thread_data: Dict[str, Any], user: User, db: Session
     ) -> Dict[str, Any]:
@@ -86,175 +285,27 @@ class EmailClassifierService:
             # Get email content to analyze
             email_content = EmailClassifierService._extract_email_content(thread_data)
 
-            # Prepare the system prompt
-            system_prompt = """
-            You are a specialized email classification system with STRICT categorization rules.
-            Your ONLY purpose is to analyze emails and assign them to EXACTLY ONE category with complete precision.
+            # Check for a custom classification prompt for the user
+            from app.models.custom_prompt import CustomPrompt
 
-            ## CLASSIFICATION HIERARCHY (FOLLOW THIS ORDER)
+            custom_prompt = (
+                db.query(CustomPrompt)
+                .filter(
+                    CustomPrompt.user_id == user.id,
+                    CustomPrompt.prompt_type == "classification",
+                )
+                .first()
+            )
 
-            STEP 1: Identify if the email's PRIMARY FOCUS is:
-            - Describing an open job position → JOB POSTING
-            - Discussing a specific person's candidacy → CANDIDATE
-            - Announcing a scheduled gathering → EVENT
-            - Primarily asking for information → QUESTIONS
-            - Introducing a topic for discussion → DISCUSSION TOPICS
-            - If none of above apply → OTHER
-
-            STEP 2: If unclear from primary focus, use these DECISIVE INDICATORS:
-
-            FOR JOB POSTING (ANY of these):
-            - Subject contains: "hiring", "job opening", "position", "vacancy", "opportunity at [company]"
-            - Email describes specific role responsibilities
-            - Email lists job requirements or qualifications needed
-            - Email is written from an employer's perspective about their needs
-            - Email mentions application process for a specific role
-
-            FOR CANDIDATE (ANY of these):
-            - Subject contains: "candidate", "applicant", "resume", "seeking position", "looking for job"
-            - Email discusses someone's work history, skills, or qualifications
-            - Email is written from perspective of someone seeking work
-            - Email refers to a specific person being recommended or considered
-            - Email mentions matching people to jobs (rather than jobs to people)
-
-            FOR EVENT (ANY of these):
-            - Subject contains: "meeting", "webinar", "conference", "event", "session"
-            - Email mentions specific date, time and location for a gathering
-            - Email includes registration or attendance information
-            - Email describes agenda or speakers
-
-            FOR QUESTIONS (ANY of these):
-            - Subject or body contains multiple question marks
-            - Email specifically requests information, clarification, or explanations
-            - Email uses interrogative language (who, what, when, where, why, how)
-            - Email clearly states "I have a question" or similar phrasing
-            - Email asks for help on a specific topic
-
-            FOR DISCUSSION TOPICS (ANY of these):
-            - Email introduces a topic for team discussion or decision
-            - Email solicits opinions or feedback on a shared topic
-            - Email contains phrases like "let's discuss", "thoughts on", "what do you think about"
-            - Email continues an ongoing thread or conversation on a specific topic
-            - Email shares information with an invitation for response
-
-            FOR OTHER (ANY of these):
-            - Email doesn't clearly fit into any of the above categories
-            - Email contains multiple unrelated topics or general updates
-            - Email is administrative in nature (e.g., notifications, system messages)
-            - Email is a personal message unrelated to recruitment
-            - Email is a newsletter, marketing communication, or general announcement
-
-            ## DEFINITIVE RULES
-
-            1. SUBJECT LINE OVERRULES BODY in case of conflict, UNLESS the body CLEARLY contradicts the subject
-            2. MOST RECENT MESSAGE has priority over earlier messages
-            3. If discussing BOTH a job AND candidates, determine which is the MAIN PURPOSE:
-               - If evaluating candidates FOR a specific job → CANDIDATE
-               - If describing a job and mentioning ideal candidates → JOB POSTING
-            4. Matching/recommending candidates to jobs is ALWAYS → CANDIDATE
-            5. An email with a list of multiple job openings is ALWAYS → JOB POSTING
-            6. Messages with "Re:" prefix follow the same rules - classify by CONTENT not just by being a reply
-            7. If email contains multiple questions but is primarily about a job posting → JOB POSTING
-            8. If email introduces a discussion topic about candidates → CANDIDATE
-            9. Only classify as QUESTIONS if asking for information is the PRIMARY purpose
-            10. Only classify as DISCUSSION TOPICS if starting/continuing a discussion is the PRIMARY purpose
-            11. Use OTHER sparingly, ONLY when no other categories reasonably apply
-
-            ## UNAMBIGUOUS EXAMPLES
-
-            DEFINITE JOB POSTINGS:
-            - "Hiring a Full-Stack Developer at TechCorp" describing position details and application process
-            - "New Role: Senior Project Manager - $120K" listing job responsibilities
-            - "Re: Cloud Engineer Position" that primarily describes job requirements
-            - "We're expanding our team" describing open positions
-
-            DEFINITE CANDIDATES:
-            - "John Smith - Software Engineer Resume" containing someone's qualifications
-            - "Recommending Jane for the analyst role" discussing a specific person
-            - "Re: Candidate for Marketing Position" evaluating someone's fit
-            - "Looking for work in data science" from someone seeking employment
-            - "Matching developers to your open roles" about finding candidates for positions
-
-            DEFINITE QUESTIONS:
-            - "Question about the hiring process?" asking for procedural clarification
-            - "Can you explain the benefits package?" requesting specific information
-            - "What skills are required for this position?" asking about job requirements
-            - "How do I submit my resume?" asking about application procedures
-            - "When is the application deadline?" requesting timing information
-
-            DEFINITE DISCUSSION TOPICS:
-            - "Thoughts on our hiring strategy for Q3" introducing a topic for team input
-            - "Let's discuss the candidate evaluation process" starting a conversation
-            - "Feedback needed on job description draft" soliciting opinions
-            - "Continuing our conversation about the interview panel" extending a thread
-            - "I've been thinking about how we structure our recruitment" sharing ideas for discussion
-
-            DEFINITE OTHER:
-            - "Weekly department update" containing miscellaneous information
-            - "System notification: Your account password will expire" administrative message
-            - "Happy holidays from the team" personal or social message
-            - "Company newsletter" with general updates not specific to recruitment
-            - "Reminder: Submit your timesheet" administrative reminder
-
-            ## FIELD EXTRACTION
-
-            For each type, extract these fields:
-
-            JOB POSTING:
-            - company_name: The company offering the job
-            - position: The job title or position
-            - location: Where the job is located (remote, city, etc.)
-            - salary_range: Salary information if available
-            - requirements: Key skills or requirements
-            - application_deadline: When to apply by (if mentioned)
-
-            CANDIDATE:
-            - candidate_name: Name of the candidate
-            - position_applied: Position they're applying for
-            - experience_years: Years of experience
-            - key_skills: Main skills of the candidate
-            - education: Educational background
-            - availability: When they can start
-
-            EVENT:
-            - event_name: Name of the event
-            - event_date: When it's happening
-            - event_time: Time of the event
-            - location: Where it's happening (virtual, physical location)
-            - description: Brief description of the event
-            - registration_deadline: When to register by (if mentioned)
-
-            QUESTIONS:
-            - main_question: The primary question being asked
-            - topic: The subject or topic of the question
-            - urgency: Any indication of urgency (if mentioned)
-            - context: Brief context behind the question
-            - requested_information: Specific information being requested
-
-            DISCUSSION TOPICS:
-            - topic_title: Short title or name of the topic
-            - key_points: Main points or ideas being discussed
-            - action_items: Any proposed actions or next steps
-            - stakeholders: People involved or mentioned
-            - deadline: Any relevant deadlines mentioned
-
-            OTHER:
-            - summary: Brief summary of the content
-            - category: Best subcategory if possible (administrative, personal, etc.)
-            - action_required: Whether any action is needed (if applicable)
-            - sender_type: Type of sender (system, individual, organization)
-
-            ## CLASSIFICATION OUTPUT
-
-            After analyzing, output JSON with:
-            1. "classification": EXACTLY ONE of ["Job Posting", "Candidate", "Event", "Questions", "Discussion Topics", "Other"]
-            2. "confidence": A number from 0-100
-            3. "primary_indicators": List the SPECIFIC words/phrases that determined this classification
-            4. "fields": Extract the appropriate structured data
-            5. "reasoning": Brief explanation focusing on which DEFINITIVE RULE was applied
-
-            REMEMBER: Your categorization MUST be consistent and follow these rules EXACTLY.
-            """
+            # Use the custom prompt if available, otherwise use the default
+            if custom_prompt:
+                system_prompt = custom_prompt.content
+                logger.info(f"Using custom classification prompt for user {user.id}")
+            else:
+                system_prompt = (
+                    EmailClassifierService.get_default_classification_prompt()
+                )
+                logger.info(f"Using default classification prompt for user {user.id}")
 
             # Generate the classification with gpt-4o
             try:

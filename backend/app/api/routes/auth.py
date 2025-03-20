@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 import os
 import requests
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, ValidationError
 from fastapi.security import OAuth2PasswordBearer
 
@@ -153,14 +153,14 @@ async def callback(
         access_token = auth_service.create_access_token(
             data={"sub": user.email, "user_id": user.id}
         )
-        
+
         # Check if this is a background service flow (from state parameter)
         if state == "background_service_enable":
             print(f"Processing background service OAuth flow for user {user.id}")
-            
+
             # Enable background service
             success = auth_service.enable_background_service(user.id, db)
-            
+
             if success:
                 print(f"Successfully enabled background service for user {user.id}")
                 # Redirect to background service settings with success flag
@@ -168,8 +168,10 @@ async def callback(
             else:
                 print(f"Failed to enable background service for user {user.id}")
                 # Redirect to background service settings with error flag
-                redirect_url = f"{settings.CORS_ORIGINS[0]}/settings/background-service?error=true"
-                
+                redirect_url = (
+                    f"{settings.CORS_ORIGINS[0]}/settings/background-service?error=true"
+                )
+
             return RedirectResponse(url=redirect_url)
         else:
             # Regular login flow - redirect to frontend with token
@@ -179,11 +181,13 @@ async def callback(
     except Exception as e:
         error_message = f"Error processing OAuth callback: {str(e)}"
         print(f"OAuth callback error: {error_message}")
-        
+
         # Determine where to redirect based on state parameter
         if state == "background_service_enable":
             # Background service flow error - redirect to background service settings
-            error_redirect = f"{settings.CORS_ORIGINS[0]}/settings/background-service?error=true"
+            error_redirect = (
+                f"{settings.CORS_ORIGINS[0]}/settings/background-service?error=true"
+            )
             return RedirectResponse(url=error_redirect)
         else:
             # Regular flow error - throw HTTP exception
@@ -439,15 +443,17 @@ async def logout(
     try:
         # Clear the user's refresh token in the database
         auth_service.invalidate_refresh_token(current_user.id, db)
-        
+
         return {"status": "success", "message": "Logged out successfully"}
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Logout failed: {str(e)}"
+            detail=f"Logout failed: {str(e)}",
         )
 
 
 @router.get("/me", response_model=Dict[str, Any])
-async def get_current_user_info(current_user: User = Depends(auth_service.get_current_user)):
+async def get_current_user_info(
+    current_user: User = Depends(auth_service.get_current_user),
+):
     """Get current user information"""

@@ -154,12 +154,13 @@ class EmailLabelService:
             db.add_all(candidate_labels)
             db.commit()
 
-        # Create communication types category and labels if they don't exist
+        # Check if communication category exists
         communication_category = (
             db.query(LabelCategory)
             .filter(LabelCategory.name == "Communication Types")
             .first()
         )
+
         if not communication_category:
             communication_category = LabelCategory(
                 name="Communication Types",
@@ -182,6 +183,12 @@ class EmailLabelService:
                     category_id=communication_category.id,
                     description="Emails introducing or continuing topical discussions",
                     color="#F6BF26",  # Amber/Gold
+                ),
+                EmailLabel(
+                    name="Irrelevant",
+                    category_id=communication_category.id,
+                    description="Promotional and security emails that don't need storing or replies",
+                    color="#DD5959",  # Red-ish
                 ),
                 EmailLabel(
                     name="Other",

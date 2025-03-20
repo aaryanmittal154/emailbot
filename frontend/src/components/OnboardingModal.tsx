@@ -10,7 +10,6 @@ import {
   Button,
   Text,
   VStack,
-  HStack,
   Radio,
   RadioGroup,
   Box,
@@ -36,7 +35,6 @@ const OnboardingModal: React.FC<OnboardingModalProps> = ({
   onClose,
   onOnboardingComplete,
 }) => {
-  const [step, setStep] = useState(1);
   const [emailCount, setEmailCount] = useState(100);
   const [isLoading, setIsLoading] = useState(false);
   const toast = useToast();
@@ -123,81 +121,74 @@ const OnboardingModal: React.FC<OnboardingModalProps> = ({
     >
       <ModalOverlay />
       <ModalContent>
-        <ModalHeader>Welcome to EmailBot</ModalHeader>
+        <ModalHeader>EmailBot Setup</ModalHeader>
         <ModalCloseButton />
         <ModalBody>
-          {step === 1 && (
-            <VStack spacing={6} align="stretch">
-              <Heading size="md">Let's get you set up</Heading>
-              <Text>
-                EmailBot uses AI to help you manage your emails more
-                efficiently. To provide personalized assistance, we need access
-                to some of your emails.
-              </Text>
-              <Text fontWeight="bold">
-                How many of your recent emails would you like us to access?
-              </Text>
-              <Text fontSize="sm" color="gray.600" mb={4}>
-                We'll only index and store metadata for the number you select.
-                This helps us understand your communication patterns and provide
-                better assistance.
-              </Text>
+          <VStack spacing={6} align="stretch">
+            <Heading size="md">Let's get you set up</Heading>
+            <Text>
+              EmailBot uses AI to help you manage your emails more efficiently.
+              To provide personalized assistance, we need access to some of your
+              emails.
+            </Text>
+            <Text fontWeight="bold">
+              How many of your recent emails would you like us to access?
+            </Text>
+            <Text fontSize="sm" color="gray.600" mb={4}>
+              We'll automatically use your most recent emails up to the number
+              you select.
+            </Text>
 
-              <RadioGroup
-                onChange={(val) => setEmailCount(Number(val))}
-                value={emailCount.toString()}
-              >
-                <VStack align="stretch" spacing={3}>
-                  {emailOptions.map((option) => (
-                    <Box
-                      key={option.value}
-                      borderWidth="1px"
-                      borderRadius="md"
-                      p={3}
-                      cursor="pointer"
-                      bg={emailCount === option.value ? "blue.50" : "white"}
-                      borderColor={
-                        emailCount === option.value ? "blue.500" : "gray.200"
-                      }
-                      onClick={() => setEmailCount(option.value)}
-                    >
-                      <Flex justifyContent="space-between" alignItems="center">
-                        <Radio value={option.value.toString()} size="lg">
-                          <Text fontWeight="medium">{option.label} emails</Text>
-                        </Radio>
-                        <Badge
-                          colorScheme={option.value === 100 ? "green" : "blue"}
-                        >
-                          {option.value === 100
-                            ? "Recommended"
-                            : option.description}
-                        </Badge>
-                      </Flex>
-                    </Box>
-                  ))}
-                </VStack>
-              </RadioGroup>
+            <RadioGroup
+              onChange={(val) => setEmailCount(Number(val))}
+              value={emailCount.toString()}
+            >
+              <VStack align="stretch" spacing={3}>
+                {emailOptions.map((option) => (
+                  <Box
+                    key={option.value}
+                    borderWidth="1px"
+                    borderRadius="md"
+                    p={3}
+                    cursor="pointer"
+                    bg={emailCount === option.value ? "blue.50" : "white"}
+                    borderColor={
+                      emailCount === option.value ? "blue.500" : "gray.200"
+                    }
+                    onClick={() => setEmailCount(option.value)}
+                  >
+                    <Flex justifyContent="space-between" alignItems="center">
+                      <Radio value={option.value.toString()} size="lg">
+                        <Text fontWeight="medium">{option.label} emails</Text>
+                      </Radio>
+                      <Badge
+                        colorScheme={option.value === 100 ? "green" : "blue"}
+                      >
+                        {option.value === 100
+                          ? "Recommended"
+                          : option.description}
+                      </Badge>
+                    </Flex>
+                  </Box>
+                ))}
+              </VStack>
+            </RadioGroup>
 
-              <Text fontSize="sm" color="gray.500" mt={4}>
-                Note: You can change this setting later from your dashboard.
-                Accessing more emails provides better results but initial
-                processing takes longer.
-              </Text>
-            </VStack>
-          )}
+            <Text fontSize="sm" color="gray.500" mt={4}>
+              Note: You can change this setting later from your dashboard.
+            </Text>
+          </VStack>
         </ModalBody>
 
         <ModalFooter>
-          {step === 1 && (
-            <Button
-              colorScheme="blue"
-              onClick={handleSubmit}
-              isLoading={isLoading}
-              loadingText="Saving..."
-            >
-              Get Started
-            </Button>
-          )}
+          <Button
+            colorScheme="blue"
+            onClick={handleSubmit}
+            isLoading={isLoading}
+            loadingText="Saving..."
+          >
+            Get Started
+          </Button>
         </ModalFooter>
       </ModalContent>
     </Modal>

@@ -65,6 +65,7 @@ import {
   refreshEmailsFromDatabase,
   getCurrentUser,
 } from "../../lib/api";
+import PromptManagement from "../../components/PromptManagement";
 
 const BASE_URL = "https://emailbot-k8s7.onrender.com";
 
@@ -153,6 +154,7 @@ export default function Dashboard() {
   const [questions, setQuestions] = useState<any[]>([]);
   const [discussions, setDiscussions] = useState<any[]>([]);
   const [otherEmails, setOtherEmails] = useState<any[]>([]);
+  const [irrelevantEmails, setIrrelevantEmails] = useState<any[]>([]);
   const [loadingLabeled, setLoadingLabeled] = useState<boolean>(false);
   const [selectedLabeledEmail, setSelectedLabeledEmail] = useState<any>(null);
   const [extractedFields, setExtractedFields] = useState<any>(null);
@@ -209,8 +211,12 @@ export default function Dashboard() {
           setIsCheckingEmails(true);
           console.log("Loading emails from database on app start/refresh");
 
+          // Use the user's preferred email count instead of hardcoded value
+          const emailCount = response.data.max_emails_to_index || 10;
+          console.log(`Using user's selected email count: ${emailCount}`);
+
           // Use refreshEmailsFromDatabase instead of fetchEmails to ensure we're loading from DB
-          const emailsResponse = await refreshEmailsFromDatabase(20);
+          const emailsResponse = await refreshEmailsFromDatabase(emailCount);
 
           if (emailsResponse && emailsResponse.data) {
             // Sort the refreshed emails by date (newest first)
@@ -222,7 +228,7 @@ export default function Dashboard() {
 
             // Update the main emails list
             setEmails(refreshedEmails);
-            setHasMore(refreshedEmails.length === 10);
+            setHasMore(refreshedEmails.length === emailCount);
             setPage(1);
           }
 
@@ -286,10 +292,13 @@ export default function Dashboard() {
       // Add cache-busting timestamp
       const timestamp = new Date().getTime();
 
+      // Use the user's preferred email count
+      const emailCount = user?.max_emails_to_index || 10;
+
       const response = await axios.get("/api/emails", {
         params: {
           page,
-          max_results: 10,
+          page_size: emailCount,
           priority_categories: ["Job Posting", "Candidate"],
           t: timestamp, // Cache-busting parameter
         },
@@ -319,7 +328,7 @@ export default function Dashboard() {
         setEmails(sortedEmails);
       }
 
-      setHasMore(response.data.length === 10);
+      setHasMore(response.data.length === emailCount);
       setPage(page);
     } catch (error: any) {
       console.error("Error fetching emails:", error);
@@ -571,6 +580,7 @@ export default function Dashboard() {
         questionsRes,
         discussionsRes,
         otherRes,
+        irrelevantRes,
       ] = await Promise.all([
         getEmailsByLabel("Job Posting", { refresh_db: true, t: cacheBuster }),
         getEmailsByLabel("Candidate", { refresh_db: true, t: cacheBuster }),
@@ -581,6 +591,7 @@ export default function Dashboard() {
           t: cacheBuster,
         }),
         getEmailsByLabel("Other", { refresh_db: true, t: cacheBuster }),
+        getEmailsByLabel("Irrelevant", { refresh_db: true, t: cacheBuster }),
       ]);
 
       // Sort function for emails (newest first)
@@ -599,6 +610,7 @@ export default function Dashboard() {
       setQuestions(sortByDate(questionsRes.data || []));
       setDiscussions(sortByDate(discussionsRes.data || []));
       setOtherEmails(sortByDate(otherRes.data || []));
+      setIrrelevantEmails(sortByDate(irrelevantRes.data || []));
       console.log("Refreshed all labeled categories from database");
     } catch (error) {
       console.error("Error fetching labeled emails:", error);
@@ -1619,8 +1631,11 @@ export default function Dashboard() {
     });
 
     try {
+      // Use user preference instead of hardcoded value
+      const emailCount = user?.max_emails_to_index || 10;
+
       // First refresh the main inbox emails
-      const response = await refreshEmailsFromDatabase(20);
+      const response = await refreshEmailsFromDatabase(emailCount);
 
       if (!response || !response.data) {
         throw new Error("Invalid response from server");
@@ -1670,6 +1685,63 @@ export default function Dashboard() {
     }
   };
 
+  // Handler for when onboarding is complete
+  const handleOnboardingComplete = () => {
+    if (user) {
+      setUser({
+        ...user,
+        is_onboarded: true,
+      });
+    }
+    setShowOnboardingModal(false);
+
+    // Load emails after onboarding is complete
+    setIsCheckingEmails(true);
+
+    // First get the latest user data including max_emails_to_index
+    getCurrentUser()
+      .then((userResponse) => {
+        // Update user with the latest data including max_emails_to_index
+        setUser(userResponse.data);
+
+        // Use the user's preferred email count
+        const emailCount = userResponse.data.max_emails_to_index || 10;
+
+        // Then fetch emails based on the user's preference
+        refreshEmailsFromDatabase(emailCount).then((emailsResponse) => {
+          if (emailsResponse && emailsResponse.data) {
+            // Sort the refreshed emails by date (newest first)
+            const refreshedEmails = [...emailsResponse.data].sort((a, b) => {
+              const dateA = a.date || "";
+              const dateB = b.date || "";
+              return new Date(dateB).getTime() - new Date(dateA).getTime();
+            });
+
+            // Update the main emails list
+            setEmails(refreshedEmails);
+            setHasMore(refreshedEmails.length === emailCount);
+            setPage(1);
+          }
+          setIsCheckingEmails(false);
+        });
+
+        fetchLabeledEmails();
+
+        toast({
+          title: "Onboarding complete!",
+          description:
+            "Your preferences have been saved. We're now loading your emails.",
+          status: "success",
+          duration: 5000,
+          isClosable: true,
+        });
+      })
+      .catch((error) => {
+        console.error("Error fetching user data after onboarding:", error);
+        setIsCheckingEmails(false);
+      });
+  };
+
   if (isLoading) {
     return (
       <Flex height="100vh" align="center" justify="center">
@@ -1685,67 +1757,13 @@ export default function Dashboard() {
         <OnboardingModal
           isOpen={showOnboardingModal}
           onClose={() => setShowOnboardingModal(false)}
-          onOnboardingComplete={() => {
-            if (user) {
-              setUser({
-                ...user,
-                is_onboarded: true,
-              });
-            }
-            setShowOnboardingModal(false);
-
-            // Load emails after onboarding is complete
-            setIsCheckingEmails(true);
-            refreshEmailsFromDatabase(20).then((emailsResponse) => {
-              if (emailsResponse && emailsResponse.data) {
-                // Sort the refreshed emails by date (newest first)
-                const refreshedEmails = [...emailsResponse.data].sort(
-                  (a, b) => {
-                    const dateA = a.date || "";
-                    const dateB = b.date || "";
-                    return (
-                      new Date(dateB).getTime() - new Date(dateA).getTime()
-                    );
-                  }
-                );
-
-                // Update the main emails list
-                setEmails(refreshedEmails);
-                setHasMore(refreshedEmails.length === 10);
-                setPage(1);
-              }
-              setIsCheckingEmails(false);
-            });
-
-            fetchLabeledEmails();
-
-            toast({
-              title: "Onboarding complete!",
-              description:
-                "Your preferences have been saved. We're now loading your emails.",
-              status: "success",
-              duration: 5000,
-              isClosable: true,
-            });
-          }}
+          onOnboardingComplete={handleOnboardingComplete}
         />
       )}
 
       <Flex justify="space-between" align="center" mb={8}>
         <Heading>Superconnector Email</Heading>
         <HStack spacing={3}>
-          {/*
-          <Button
-            leftIcon={<FiRefreshCw />}
-            colorScheme="blue"
-            isLoading={isCheckingEmails}
-            loadingText="Refreshing..."
-            onClick={handleCheckNewEmails}
-            mr={2}
-          >
-            Refresh Emails
-          </Button>
-          */}
           <Button
             leftIcon={<FiSettings />}
             colorScheme="teal"
@@ -1802,24 +1820,13 @@ export default function Dashboard() {
             <Tab>Follow-ups</Tab>
             <Tab>Search</Tab>
             <Tab>Other</Tab>
+            <Tab>Irrelevant</Tab>
+            <Tab>Prompts</Tab>
           </TabList>
           <TabPanels>
             <TabPanel>
               {/* Add visible refresh button at the top of each tab */}
-              <Box textAlign="right" mb={4}>
-                {/*
-                <Button
-                  leftIcon={<FiRefreshCw />}
-                  colorScheme="green"
-                  onClick={handleCheckNewEmails}
-                  isLoading={isCheckingEmails}
-                  loadingText="Refreshing emails..."
-                  size="md"
-                >
-                  Refresh Emails
-                </Button>
-                */}
-              </Box>
+              <Box textAlign="right" mb={4}></Box>
 
               {/* Add semantic search input */}
               <Flex mb={4} align="center">
@@ -1867,39 +1874,7 @@ export default function Dashboard() {
                     You have {emails.length} recent emails in your inbox.
                   </Text>
                 </Box>
-                <Flex ml={4}>
-                  {/*
-                  <Button
-                    colorScheme="green"
-                    mr={2}
-                    onClick={handleCheckNewEmails}
-                    isLoading={isCheckingEmails}
-                    loadingText="Refreshing"
-                    leftIcon={<FiMail />}
-                  >
-                    Refresh Emails
-                  </Button>
-                  <Button
-                    colorScheme="blue"
-                    mr={2}
-                    onClick={() => fetchEmails(1, false)}
-                    isLoading={isLoading && !isSyncing}
-                    loadingText="Refreshing"
-                  >
-                    Refresh
-                  </Button>
-                  <Button
-                    colorScheme="green"
-                    mr={2}
-                    onClick={syncEmails}
-                    isLoading={isSyncing}
-                    loadingText="Syncing"
-                  >
-                    Sync All
-                  </Button>
-                  <AutoReplyButton colorScheme="teal" />
-                  */}
-                </Flex>
+                <Flex ml={4}></Flex>
               </Flex>
 
               <Box
@@ -2018,27 +1993,6 @@ export default function Dashboard() {
                 <Box p={4} bg="white" borderRadius="md" shadow="sm">
                   <Flex justify="space-between" align="center" mb={4}>
                     <Heading size="md">Job Postings</Heading>
-                    <Flex>
-                      {/*
-                      <Button
-                        size="sm"
-                        colorScheme="green"
-                        onClick={handleCheckNewEmails}
-                        isLoading={isCheckingEmails}
-                        loadingText="Refreshing..."
-                        mr={2}
-                      >
-                        Refresh
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={fetchLabeledEmails}
-                        leftIcon={<ArrowBackIcon />}
-                      >
-                        Refresh
-                      </Button>
-                      */}
-                    </Flex>
                   </Flex>
                   {renderLabeledEmailList(jobPostings, "Job Posting")}
                 </Box>
@@ -2054,15 +2008,6 @@ export default function Dashboard() {
                 <Box p={4} bg="white" borderRadius="md" shadow="sm">
                   <Flex justify="space-between" align="center" mb={4}>
                     <Heading size="md">Candidates</Heading>
-                    {/*
-                    <Button
-                      size="sm"
-                      onClick={fetchLabeledEmails}
-                      leftIcon={<ArrowBackIcon />}
-                    >
-                      Refresh
-                    </Button>
-                    */}
                   </Flex>
                   {renderLabeledEmailList(candidates, "Candidate")}
                 </Box>
@@ -2078,15 +2023,6 @@ export default function Dashboard() {
                 <Box p={4} bg="white" borderRadius="md" shadow="sm">
                   <Flex justify="space-between" align="center" mb={4}>
                     <Heading size="md">Questions</Heading>
-                    {/*
-                    <Button
-                      size="sm"
-                      onClick={fetchLabeledEmails}
-                      leftIcon={<ArrowBackIcon />}
-                    >
-                      Refresh
-                    </Button>
-                    */}
                   </Flex>
                   {renderLabeledEmailList(questions, "Question")}
                 </Box>
@@ -2102,15 +2038,6 @@ export default function Dashboard() {
                 <Box p={4} bg="white" borderRadius="md" shadow="sm">
                   <Flex justify="space-between" align="center" mb={4}>
                     <Heading size="md">Discussion Topics</Heading>
-                    {/*
-                    <Button
-                      size="sm"
-                      onClick={fetchLabeledEmails}
-                      leftIcon={<ArrowBackIcon />}
-                    >
-                      Refresh
-                    </Button>
-                    */}
                   </Flex>
                   {renderLabeledEmailList(discussions, "Discussion")}
                 </Box>
@@ -2126,15 +2053,6 @@ export default function Dashboard() {
                 <Box p={4} bg="white" borderRadius="md" shadow="sm">
                   <Flex justify="space-between" align="center" mb={4}>
                     <Heading size="md">Events</Heading>
-                    {/*
-                    <Button
-                      size="sm"
-                      onClick={fetchLabeledEmails}
-                      leftIcon={<ArrowBackIcon />}
-                    >
-                      Refresh
-                    </Button>
-                    */}
                   </Flex>
                   {renderLabeledEmailList(events, "Event")}
                 </Box>
@@ -2150,40 +2068,32 @@ export default function Dashboard() {
                 <Box p={4} bg="white" borderRadius="md" shadow="sm">
                   <Flex justify="space-between" align="center" mb={4}>
                     <Heading size="md">Other</Heading>
-                    {/*
-                    <Button
-                      size="sm"
-                      onClick={fetchLabeledEmails}
-                      leftIcon={<ArrowBackIcon />}
-                    >
-                      Refresh
-                    </Button>
-                    */}
                   </Flex>
                   {renderLabeledEmailList(otherEmails, "Other")}
                 </Box>
               )}
             </TabPanel>
 
-            {/* Settings Tab */}
+            {/* Irrelevant Tab */}
             <TabPanel>
-              <VStack spacing={6} align="stretch">
-                {/* Auto-reply Section */}
-                <Box p={6} bg="white" borderRadius="lg" shadow="sm">
-                  <Heading size="md" mb={4}>
-                    Auto-Reply Settings
-                  </Heading>
-                  {/* <AutoReplyButton /> */}
+              {selectedLabeledEmail &&
+              selectedLabeledEmail.category === "Irrelevant" ? (
+                renderLabeledEmailView()
+              ) : (
+                <Box p={4} bg="white" borderRadius="md" shadow="sm">
+                  <Flex justify="space-between" align="center" mb={4}>
+                    <Heading size="md">
+                      Irrelevant (Promotional/Security)
+                    </Heading>
+                  </Flex>
+                  {renderLabeledEmailList(irrelevantEmails, "Irrelevant")}
                 </Box>
+              )}
+            </TabPanel>
 
-                {/* Vacation Responder Section */}
-                <Box p={6} bg="white" borderRadius="lg" shadow="sm">
-                  <Heading size="md" mb={4}>
-                    Gmail Vacation Responder
-                  </Heading>
-                  <VacationResponderSettings />
-                </Box>
-              </VStack>
+            {/* Prompts Management Tab */}
+            <TabPanel p={0}>
+              <PromptManagement />
             </TabPanel>
           </TabPanels>
         </Tabs>

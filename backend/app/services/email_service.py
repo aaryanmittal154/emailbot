@@ -58,6 +58,7 @@ def list_messages(
     label_ids: List[str] = None,
     page: int = 1,
     use_cache: bool = True,
+    refresh_db: bool = False,
 ):
     """
     List Gmail messages for a user with pagination
@@ -66,17 +67,20 @@ def list_messages(
     1. First tries to get email metadata from database cache
     2. If cache is empty or outdated, fetches from Gmail API
     3. Stores basic metadata in the database for future quick access
+
+    If refresh_db is True, only data from the database will be used (no Gmail API calls)
     """
     print(
-        f"Listing emails for user: {user.email}, max_results: {max_results}, page: {page}"
+        f"Listing emails for user: {user.email}, max_results: {max_results}, page: {page}, refresh_db: {refresh_db}"
     )
 
     try:
         # Calculate offset for pagination
         offset = (page - 1) * max_results
 
-        # If we're using cache and it's not a search query, try to get from database first
-        if use_cache and not q and not label_ids:
+        # If we're using cache and it's not a search query, or if refresh_db is True,
+        # try to get from database first
+        if (use_cache and not q and not label_ids) or refresh_db:
             # First get the timestamp of when initial indexing completed
             # This will be used to differentiate between initial indexed emails and new ones
             # We define it as the earliest creation date of any indexed email
@@ -87,59 +91,76 @@ def list_messages(
                 .first()
             )
 
-            if earliest_email:
-                initial_indexing_timestamp = earliest_email.created_at
-                print(f"Initial indexing timestamp: {initial_indexing_timestamp}")
-            else:
-                # No emails yet
-                initial_indexing_timestamp = None
-
-            # Get all emails that are either:
-            # 1. Part of the initial set (limited by user preference) OR
-            # 2. Added after the initial indexing (new emails)
+            # Query emails from database with pagination
             query = db.query(Email).filter(Email.user_id == user.id)
 
-            # Always order by date descending (newest first)
+            # Apply search filters if provided
+            if q:
+                search_terms = q.split()
+                for term in search_terms:
+                    query = query.filter(
+                        or_(
+                            Email.subject.ilike(f"%{term}%"),
+                            Email.sender.ilike(f"%{term}%"),
+                            Email.snippet.ilike(f"%{term}%"),
+                        )
+                    )
+
+            if label_ids:
+                # Get threads with these labels
+                thread_labels = (
+                    db.query(ThreadLabel)
+                    .filter(
+                        ThreadLabel.user_id == user.id,
+                        ThreadLabel.label_id.in_(label_ids),
+                    )
+                    .all()
+                )
+                thread_ids = [tl.thread_id for tl in thread_labels]
+                if thread_ids:
+                    query = query.filter(Email.thread_id.in_(thread_ids))
+                else:
+                    # No threads with these labels, return empty list
+                    return []
+
+            # Order by date descending (newest first)
             query = query.order_by(Email.date.desc())
 
-            # When we have pagination, apply it
+            # Apply pagination
             query = query.offset(offset).limit(max_results)
 
-            # Execute the query
-            existing_emails = query.all()
+            # Execute query
+            db_emails = query.all()
 
-            # If we have emails in cache, return them
-            if len(existing_emails) >= max_results or len(existing_emails) > 0:
-                print(
-                    f"Using cached email metadata from database, found {len(existing_emails)} emails"
-                )
-                # Convert to dict format and return
+            # If we got results and we're not forcing refresh from Gmail API, use them
+            if db_emails and (refresh_db or len(db_emails) >= max_results):
+                print(f"Using {len(db_emails)} emails from database cache")
                 return [
                     {
                         "id": email.id,
-                        "user_id": email.user_id,
-                        "gmail_id": email.gmail_id,
                         "thread_id": email.thread_id,
+                        "gmail_id": email.gmail_id,
                         "sender": email.sender,
-                        "recipients": (email.recipients if email.recipients else []),
-                        "subject": email.subject or "",
-                        "snippet": email.snippet or "",
+                        "recipients": email.recipients,
+                        "subject": email.subject,
+                        "snippet": email.snippet,
                         "date": email.date.isoformat() if email.date else None,
-                        "labels": email.labels if email.labels else [],
+                        "labels": email.labels,
                         "has_attachment": email.has_attachment,
                         "is_read": email.is_read,
-                        "created_at": (
-                            email.created_at.isoformat() if email.created_at else None
-                        ),
-                        "updated_at": (
-                            email.updated_at.isoformat() if email.updated_at else None
-                        ),
                     }
-                    for email in existing_emails
+                    for email in db_emails
                 ]
 
-        # If we don't have enough cached data or we have a search/filter,
-        # fetch from Gmail API
+        # If refresh_db is True and we reach here, it means we didn't find enough data in DB
+        # Return what we have rather than calling Gmail API
+        if refresh_db:
+            print(
+                f"refresh_db is True but found insufficient data in database. Returning available data."
+            )
+            return []
+
+        # For other cases, continue to use Gmail API as before
         print("Fetching email data from Gmail API")
         # Get Google credentials
         credentials = get_google_creds(user.id, db)
@@ -1214,8 +1235,7 @@ def index_all_threads(
         else:
             print(f"Existing user with {existing_email_count} emails already indexed")
 
-        # Filter threads for processing - for initial indexing, limit to max_threads
-        # For regular sync, process all new threads not already in the database
+        # Filter threads for processing
         threads_to_process = []
 
         if is_initial_indexing:
@@ -1230,6 +1250,20 @@ def index_all_threads(
                 if thread["id"] not in existing_thread_ids:
                     threads_to_process.append(thread)
             print(f"Regular sync: Processing {len(threads_to_process)} new threads")
+
+        # Delete all previous emails for this user if this is initial indexing
+        if is_initial_indexing:
+            try:
+                deleted_count = (
+                    db.query(Email).filter(Email.user_id == user.id).delete()
+                )
+                db.commit()
+                print(
+                    f"Deleted {deleted_count} existing emails for user {user.id} before initial indexing"
+                )
+            except Exception as delete_error:
+                print(f"Error deleting existing emails: {str(delete_error)}")
+                db.rollback()
 
         for thread_item in threads_to_process:
             thread_id = thread_item["id"]
@@ -1648,8 +1682,11 @@ class EmailService:
         label_ids=None,
         page=1,
         use_cache=True,
+        refresh_db=False,
     ):
-        return list_messages(user, db, max_results, q, label_ids, page, use_cache)
+        return list_messages(
+            user, db, max_results, q, label_ids, page, use_cache, refresh_db
+        )
 
     def get_thread(self, thread_id, user=None, db=None, store_embedding=False):
         return get_thread(thread_id, user, db, store_embedding)
@@ -1666,7 +1703,11 @@ class EmailService:
         return search_similar_threads(query, user, db, top_k, filter_category)
 
     def index_all_threads(
-        self, user=None, db=None, max_threads=None, is_initial_indexing=False
+        self,
+        user=None,
+        db=None,
+        max_threads=None,
+        is_initial_indexing=False,
     ):
         return index_all_threads(user, db, max_threads, is_initial_indexing)
 

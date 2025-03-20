@@ -536,9 +536,9 @@ export const refreshEmailsFromDatabase = async (maxResults: number = 20) => {
     const response = await api.get("/api/emails", {
       params: {
         page: 1,
-        max_results: maxResults,
-        refresh_db: true, // Signal to pull from DB without Gmail API call
-        t: cacheBuster, // Cache buster
+        page_size: maxResults,
+        refresh_db: true,
+        t: cacheBuster,
       },
     });
 
@@ -549,5 +549,38 @@ export const refreshEmailsFromDatabase = async (maxResults: number = 20) => {
     throw error;
   }
 };
+
+// Function to get emails with pagination
+export async function fetchEmailsWithParams({
+  page = 1,
+  pageSize = 20,
+  q,
+  labelIds,
+  refreshDb = false,
+}) {
+  const params = new URLSearchParams({
+    page: page.toString(),
+    page_size: pageSize.toString(),
+  });
+
+  if (q) params.append("q", q);
+  if (labelIds) params.append("label_ids", labelIds);
+  if (refreshDb) params.append("refresh_db", "true");
+
+  const response = await api.get(`/emails?${params.toString()}`);
+  return response;
+}
+
+// Function to get emails for onboarding selection
+export async function getEmailsForOnboarding({ page = 1, pageSize = 20 }) {
+  const params = new URLSearchParams({
+    page: page.toString(),
+    page_size: pageSize.toString(),
+    include_full_content: "true",
+  });
+
+  const response = await api.get(`/emails?${params.toString()}`);
+  return response;
+}
 
 export default api;

@@ -233,6 +233,17 @@ class AutoReplyManager:
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Generate and send an appropriate reply using RAG"""
         try:
+            # Skip processing entirely for irrelevant emails (promotional/security)
+            if classification.lower() == "irrelevant":
+                print(
+                    f"Skipping auto-reply for irrelevant email (thread {thread['thread_id']})"
+                )
+                return False, {
+                    "status": "skipped",
+                    "reason": "irrelevant_category",
+                    "message": "Email classified as irrelevant - skipping storage and reply",
+                }
+
             # First check if user has an active rate limit
             active_limit = GmailRateLimit.get_active_limit(db, user.id)
             if active_limit:
@@ -436,24 +447,9 @@ class AutoReplyManager:
         return context
 
     @staticmethod
-    async def _generate_reply_with_gpt(
-        thread: Dict[str, Any],
-        latest_message: Dict[str, Any],
-        context: str,
-        user_email: str,
-        classification: str = "General",
-    ) -> str:
-        """Generate a reply using gpt-4o with context from similar emails"""
-        try:
-            # Extract the thread conversation history
-            conversation_history = "CONVERSATION HISTORY:\n"
-            for i, msg in enumerate(thread["messages"]):
-                sender = msg["sender"]
-                role = "You" if sender == user_email else f"Them ({sender})"
-                conversation_history += f"{role}: {msg.get('snippet', '')}\n"
-
-            # Create the base prompt
-            system_prompt = """You are an intelligent email assistant that drafts contextually appropriate replies.
+    def get_default_auto_reply_prompt() -> str:
+        """Return the default auto-reply prompt"""
+        return """You are an intelligent email assistant that drafts contextually appropriate replies.
 Your task is to generate a reply to the latest email in a thread based on:
 1. The conversation history in the thread
 2. Context from similar previous email threads
@@ -475,91 +471,10 @@ DO NOT:
 - Leave ANY template placeholders like [Name] or [Company] in your response
 """
 
-            # For job postings and candidate emails, let's use our matching service to find the best matches
-            if classification.lower() in ["job posting", "candidate"]:
-                # Check if we need to find matching candidates or jobs
-                db = SessionLocal()
-                try:
-                    # Get the user record from the database
-                    user = db.query(User).filter(User.email == user_email).first()
-
-                    if user:
-                        # Find matches based on classification
-                        if classification.lower() == "job posting":
-                            # Find matching candidates for this job posting
-                            match_results = (
-                                await match_service.find_matching_candidates(
-                                    job_thread_id=thread["thread_id"],
-                                    user=user,
-                                    db=db,
-                                    top_k=3,
-                                )
-                            )
-
-                            # Add match results to the context
-                            if match_results and match_results.get("candidates"):
-                                context += "\n\nMATCHING CANDIDATES:\n"
-                                for idx, candidate in enumerate(
-                                    match_results["candidates"]
-                                ):
-                                    context += (
-                                        f"\nCandidate {idx+1}: {candidate['subject']}\n"
-                                    )
-                                    context += f"Similarity Score: {candidate['similarity_score']:.2f}\n"
-                                    # Extract candidate info from the candidate thread
-                                    candidate_thread = candidate.get(
-                                        "candidate_thread", {}
-                                    )
-                                    if candidate_thread and candidate_thread.get(
-                                        "messages"
-                                    ):
-                                        candidate_content = ""
-                                        for msg in candidate_thread["messages"]:
-                                            candidate_content += (
-                                                msg.get("body", msg.get("snippet", ""))
-                                                + "\n"
-                                            )
-                                        context += (
-                                            f"Details: {candidate_content[:500]}...\n"
-                                        )
-
-                        elif classification.lower() == "candidate":
-                            # Find matching jobs for this candidate
-                            match_results = await match_service.find_matching_jobs(
-                                candidate_thread_id=thread["thread_id"],
-                                user=user,
-                                db=db,
-                                top_k=3,
-                            )
-
-                            # Add match results to the context
-                            if match_results and match_results.get("jobs"):
-                                context += "\n\nMATCHING JOB POSTINGS:\n"
-                                for idx, job in enumerate(match_results["jobs"]):
-                                    context += f"\nJob {idx+1}: {job['subject']}\n"
-                                    context += f"Similarity Score: {job['similarity_score']:.2f}\n"
-                                    # Extract job info from the job thread
-                                    job_thread = job.get("job_thread", {})
-                                    if job_thread and job_thread.get("messages"):
-                                        job_content = ""
-                                        for msg in job_thread["messages"]:
-                                            job_content += (
-                                                msg.get("body", msg.get("snippet", ""))
-                                                + "\n"
-                                            )
-                                        context += f"Details: {job_content[:500]}...\n"
-
-                except Exception as match_error:
-                    print(f"Error finding matches: {str(match_error)}")
-                finally:
-                    db.close()
-
-            elif classification.lower() in [
-                "other events",
-                "questions",
-                "discussion topic",
-            ]:
-                system_prompt = """You are a STRICTLY FACT-BASED email assistant with ZERO ability to use general knowledge outside the provided context.
+    @staticmethod
+    def get_default_context_only_prompt() -> str:
+        """Return the default context-only prompt for certain categories"""
+        return """You are a STRICTLY FACT-BASED email assistant with ZERO ability to use general knowledge outside the provided context.
 
 CRITICAL INSTRUCTIONS (You MUST follow these or you will be penalized):
 1. YOU HAVE NO KNOWLEDGE beyond what is explicitly shown in the provided context
@@ -599,6 +514,142 @@ Response: "It seems we haven't had a detailed discussion about Y yet."
 
 Remember: Your responses MUST be based SOLELY on the information in the context. If the information is not explicitly present, acknowledge that you don't have that information rather than making something up.
 """
+
+    @staticmethod
+    def get_default_job_posting_prompt() -> str:
+        """Return the default prompt for job posting replies"""
+        return """You are an intelligent email assistant for a recruiter that specializes in matching job postings with candidates.
+Your task is to generate a helpful reply to a job posting email using:
+1. The conversation history in the thread
+2. Information about matching candidates found in the context
+3. The specific content of the incoming job posting
+
+Your reply should:
+- Acknowledge the job posting details
+- Mention the top matching candidates with their match percentages
+- Highlight key skills and experience that make these candidates a good fit
+- Be professional and helpful
+- Sound natural and human-like, not robotic
+
+DO NOT:
+- Include placeholder text or notes to yourself
+- Mention that you're an AI or that this is an automated response
+- Leave ANY template placeholders like [Name] or [Company] in your response
+- Make up candidate information that isn't in the provided context
+"""
+
+    @staticmethod
+    def get_default_candidate_prompt() -> str:
+        """Return the default prompt for candidate replies"""
+        return """You are an intelligent email assistant for a recruiter that specializes in matching candidates with job openings.
+Your task is to generate a helpful reply to a candidate email using:
+1. The conversation history in the thread
+2. Information about matching job openings found in the context
+3. The specific content of the incoming candidate email
+
+Your reply should:
+- Acknowledge the candidate's skills and experience
+- Mention the top matching job openings with their match percentages
+- Highlight key requirements and benefits of these positions
+- Be professional and helpful
+- Sound natural and human-like, not robotic
+
+DO NOT:
+- Include placeholder text or notes to yourself
+- Mention that you're an AI or that this is an automated response
+- Leave ANY template placeholders like [Name] or [Company] in your response
+- Make up job information that isn't in the provided context
+"""
+
+    @staticmethod
+    async def _generate_reply_with_gpt(
+        thread: Dict[str, Any],
+        latest_message: Dict[str, Any],
+        context: str,
+        user_email: str,
+        classification: str = "General",
+    ) -> str:
+        """Generate a reply using gpt-4o with context from similar emails"""
+        try:
+            # Extract the thread conversation history
+            conversation_history = "CONVERSATION HISTORY:\n"
+            for i, msg in enumerate(thread["messages"]):
+                sender = msg["sender"]
+                role = "You" if sender == user_email else f"Them ({sender})"
+                conversation_history += f"{role}: {msg.get('snippet', '')}\n"
+
+            # Get database session to check for custom prompts
+            from app.db.database import SessionLocal
+
+            db = SessionLocal()
+
+            try:
+                # Get user from database
+                from app.models.user import User
+
+                user = db.query(User).filter(User.email == user_email).first()
+
+                if user:
+                    # Check for custom prompt by category
+                    from app.models.custom_prompt import CustomPrompt
+
+                    custom_prompt = (
+                        db.query(CustomPrompt)
+                        .filter(
+                            CustomPrompt.user_id == user.id,
+                            CustomPrompt.category == classification,
+                            CustomPrompt.prompt_type == "auto_reply",
+                        )
+                        .first()
+                    )
+
+                    # If no category-specific prompt, check for generic custom prompt
+                    if not custom_prompt:
+                        custom_prompt = (
+                            db.query(CustomPrompt)
+                            .filter(
+                                CustomPrompt.user_id == user.id,
+                                CustomPrompt.category
+                                == "Other",  # Use "Other" as the generic category
+                                CustomPrompt.prompt_type == "auto_reply",
+                            )
+                            .first()
+                        )
+
+                    if custom_prompt:
+                        system_prompt = custom_prompt.content
+                        print(
+                            f"Using custom auto-reply prompt for user {user.id} and category {classification}"
+                        )
+                    else:
+                        # Use appropriate default prompt based on classification
+                        if classification.lower() in ["job posting"]:
+                            system_prompt = (
+                                AutoReplyManager.get_default_job_posting_prompt()
+                            )
+                        elif classification.lower() in ["candidate"]:
+                            system_prompt = (
+                                AutoReplyManager.get_default_candidate_prompt()
+                            )
+                        elif classification.lower() in [
+                            "questions",
+                            "discussion topics",
+                            "event",
+                        ]:
+                            system_prompt = (
+                                AutoReplyManager.get_default_context_only_prompt()
+                            )
+                        else:
+                            system_prompt = (
+                                AutoReplyManager.get_default_auto_reply_prompt()
+                            )
+                else:
+                    # Fall back to default prompt if user not found
+                    system_prompt = AutoReplyManager.get_default_auto_reply_prompt()
+
+            finally:
+                # Close the database session
+                db.close()
 
             user_prompt = f"""Based on the information below, draft a reply to the latest email in this thread.
 

@@ -34,3 +34,6 @@ class User(Base):
     rate_limits = relationship(
         "GmailRateLimit", back_populates="user", cascade="all, delete-orphan"
     )
+    custom_prompts = relationship(
+        "CustomPrompt", back_populates="user", cascade="all, delete-orphan"
+    )

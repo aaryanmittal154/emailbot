@@ -148,6 +148,16 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
   // Add state for test button loading
   const [isTestingEmailFetch, setIsTestingEmailFetch] = useState(false);
 
+  // State for various email categories
+  const [emails, setEmails] = useState<any[]>(initialEmails);
+  const [jobPostings, setJobPostings] = useState<any[]>(safeJobPostings);
+  const [candidates, setCandidates] = useState<any[]>(initialCandidates);
+  const [questions, setQuestions] = useState<any[]>([]);
+  const [discussions, setDiscussions] = useState<any[]>([]);
+  const [events, setEvents] = useState<any[]>([]);
+  const [otherEmails, setOtherEmails] = useState<any[]>([]);
+  const [irrelevantEmails, setIrrelevantEmails] = useState<any[]>([]);
+
   // Update state when props change
   useEffect(() => {
     if (initialEmails.length > 0) setEmails(initialEmails);
@@ -254,71 +264,44 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
     }
   };
 
-  // Fetch labeled emails - preserve lazy loading
-  const fetchLabeledEmails = async (initialLoad = false) => {
+  // Fetch labeled emails
+  const fetchLabeledEmails = async () => {
+    if (loadingLabeled) return;
+
+    setLoadingLabeled(true);
+
     try {
-      setLoadingLabeled(true);
+      // Fetch all the different categories in parallel for better performance
+      const [jobResults, candidateResults, questionResults, discussionResults, eventsResults, otherResults, irrelevantResults] = await Promise.all([
+        getEmailsByLabel("Job Posting"),
+        getEmailsByLabel("Candidate"),
+        getEmailsByLabel("Questions"),
+        getEmailsByLabel("Discussion Topics"),
+        getEmailsByLabel("Event"),
+        getEmailsByLabel("Other"),
+        getEmailsByLabel("Irrelevant")
+      ]);
 
-      // On initial load, only fetch high-priority categories
-      if (initialLoad) {
-        // Job Postings - high priority category
-        const jobResponse = await getEmailsByLabel("Job Posting");
-        setJobPostings(jobResponse.data.emails || []);
+      setJobPostings(jobResults.data || []);
+      setCandidates(candidateResults.data || []);
+      setQuestions(questionResults.data || []);
+      setDiscussions(discussionResults.data || []);
+      setEvents(eventsResults.data || []);
+      setOtherEmails(otherResults.data || []);
+      setIrrelevantEmails(irrelevantResults.data || []);
 
-        // Candidates - high priority category
-        const candidateResponse = await getEmailsByLabel("Candidate");
-        setCandidates(candidateResponse.data.emails || []);
-
-        // Mark these categories as loaded
-        setLoadedCategories(["Job Posting", "Candidate"]);
-      } else {
-        // Fetch all categories (but respect which ones are already loaded)
-        if (!loadedCategories.includes("Job Posting")) {
-          const jobResponse = await getEmailsByLabel("Job Posting");
-          setJobPostings(jobResponse.data.emails || []);
-        }
-
-        if (!loadedCategories.includes("Candidate")) {
-          const candidateResponse = await getEmailsByLabel("Candidate");
-          setCandidates(candidateResponse.data.emails || []);
-        }
-
-        if (!loadedCategories.includes("Event")) {
-          const eventResponse = await getEmailsByLabel("Event");
-          setEvents(eventResponse.data.emails || []);
-        }
-
-        if (!loadedCategories.includes("Questions")) {
-          const questionsResponse = await getEmailsByLabel("Questions");
-          setQuestions(questionsResponse.data.emails || []);
-        }
-
-        if (!loadedCategories.includes("Discussion Topics")) {
-          const discussionResponse = await getEmailsByLabel(
-            "Discussion Topics"
-          );
-          setDiscussionTopics(discussionResponse.data.emails || []);
-        }
-
-        if (!loadedCategories.includes("Other")) {
-          const otherResponse = await getEmailsByLabel("Other");
-          setOther(otherResponse.data.emails || []);
-        }
-
-        // Mark all categories as loaded
-        setLoadedCategories([
-          "Job Posting",
-          "Candidate",
-          "Event",
-          "Questions",
-          "Discussion Topics",
-          "Other",
-        ]);
-      }
-
-      setLoadingLabeled(false);
+      // Update the badge counts if needed
+      console.log(`Loaded labeled emails: ${jobResults.data.length} jobs, ${candidateResults.data.length} candidates`);
     } catch (error) {
       console.error("Error fetching labeled emails:", error);
+      toast({
+        title: "Error",
+        description: "Failed to load categorized emails. Please try again.",
+        status: "error",
+        duration: 5000,
+        isClosable: true,
+      });
+    } finally {
       setLoadingLabeled(false);
     }
   };
@@ -346,10 +329,13 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
           setQuestions(response.data.emails || []);
           break;
         case "Discussion Topics":
-          setDiscussionTopics(response.data.emails || []);
+          setDiscussions(response.data.emails || []);
           break;
         case "Other":
-          setOther(response.data.emails || []);
+          setOtherEmails(response.data.emails || []);
+          break;
+        case "Irrelevant":
+          setIrrelevantEmails(response.data.emails || []);
           break;
       }
 
@@ -392,7 +378,7 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
       // Fetch emails after a short delay to allow sync to start
       setTimeout(() => {
         fetchEmails();
-        fetchLabeledEmails(false);
+        fetchLabeledEmails();
         setIsSyncing(false);
       }, 2000);
     } catch (error) {
@@ -425,7 +411,7 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
     if (user) {
       fetchEmails();
       // Only load high-priority categories initially
-      fetchLabeledEmails(true);
+      fetchLabeledEmails();
     }
   }, [user]);
 
@@ -741,6 +727,23 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
     />
   );
 
+  // Render the irrelevant emails panel
+  const renderIrrelevantPanel = () => (
+    <CategoryPanel
+      title="Irrelevant"
+      category="Irrelevant"
+      emails={adaptEmails(irrelevantEmails)}
+      isLoading={loadingLabeled}
+      onRefresh={() => handleRefreshCategory("Irrelevant")}
+      onEmailSelect={(email) => {
+        handleSelectEmail(reverseAdaptEmail(email));
+      }}
+      badgeCount={irrelevantEmails.length}
+      animation="fadeIn"
+      emptyMessage="No irrelevant emails found (promotional/security)"
+    />
+  );
+
   return (
     <Box position="relative">
       {/* Add the NewEmailNotifier at the top */}
@@ -915,20 +918,23 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
                 </Tab>
                 <Tab>
                   Discussion Topics{" "}
-                  {discussionTopics.length > 0 && (
+                  {discussions.length > 0 && (
                     <Badge ml={2} colorScheme="teal" borderRadius="full">
-                      {discussionTopics.length}
+                      {discussions.length}
                     </Badge>
                   )}
                 </Tab>
                 <Tab>
                   Other{" "}
-                  {other.length > 0 && (
+                  {otherEmails.length > 0 && (
                     <Badge ml={2} colorScheme="gray" borderRadius="full">
-                      {other.length}
+                      {otherEmails.length}
                     </Badge>
                   )}
                 </Tab>
+                <Tab>Irrelevant {irrelevantEmails.length > 0 && (
+                  <Badge ml={2} colorScheme="red" borderRadius="full">{irrelevantEmails.length}</Badge>
+                )}</Tab>
               </TabList>
 
               <TabPanels>
@@ -1035,17 +1041,20 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
                   {renderCategoryPanel(
                     "Discussion Topics",
                     "Discussion Topics",
-                    discussionTopics,
+                    discussions,
                     () => loadCategoryIfNeeded("Discussion Topics")
                   )}
                 </TabPanel>
 
                 {/* Other Tab */}
                 <TabPanel p={0}>
-                  {renderCategoryPanel("Other", "Other", other, () =>
+                  {renderCategoryPanel("Other", "Other", otherEmails, () =>
                     loadCategoryIfNeeded("Other")
                   )}
                 </TabPanel>
+
+                {/* Irrelevant Tab */}
+                <TabPanel p={0}>{renderIrrelevantPanel()}</TabPanel>
               </TabPanels>
             </Tabs>
           </MotionBox>
