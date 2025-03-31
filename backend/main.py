@@ -20,6 +20,7 @@ from app.api.routes import (
     analytics,
     matches,
     prompt_management,
+    thread_monitoring,
 )
 from app.core.config import settings
 from app.core.scheduler import start_scheduler, stop_scheduler
@@ -122,6 +123,7 @@ app.include_router(
     matches.router, prefix="/api/matches", tags=["Job-Candidate Matching"]
 )
 app.include_router(prompt_management.router, prefix="/api", tags=["Custom Prompts"])
+app.include_router(thread_monitoring.router, prefix="/api", tags=["Thread Monitoring"])
 # Add new routes
 app.include_router(semantic_search.router, tags=["Semantic Search"])
 app.include_router(background_service_routes.router, tags=["Background Service"])

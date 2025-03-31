@@ -30,6 +30,7 @@ from app.services.match_service import match_service
 from app.db.database import SessionLocal
 from app.utils.thread_utils import get_thread_category
 from app.core.config import settings
+from app.services.thread_monitoring_service import ThreadMonitoringService
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -362,6 +363,12 @@ class AutoReplyManager:
 
                 print(f"Auto-reply sent successfully for thread {thread['thread_id']}")
                 print(f"Response: {response}")
+
+                # Register this thread for monitoring
+                ThreadMonitoringService.register_thread_for_monitoring(
+                    thread_id=thread["thread_id"], user_id=user.id
+                )
+                print(f"Thread {thread['thread_id']} registered for monitoring")
 
                 # Re-index the thread after sending the reply
                 print(f"Indexing thread {thread['thread_id']} after sending auto-reply")
@@ -1171,6 +1178,31 @@ Based on this information, draft a helpful and appropriate reply.{' Remember to 
                 thread["messages"], user.email
             ):
                 print(f"Skipping email {email_id}: too old or already replied")
+                # --- ADD MONITORING CALL HERE before returning ---
+                try:
+                    logger.info(
+                        f"Triggering monitoring check for skipped email {email_id} in thread {thread_id}"
+                    )
+                    # We need notification_data format, let's construct a minimal version
+                    minimal_notification_data = {
+                        "message": {"data": {"emailMessageId": email_id}}
+                    }
+                    monitoring_outcome = (
+                        await ThreadMonitoringService.process_gmail_push_notification(
+                            user=user,
+                            db=db,
+                            notification_data=minimal_notification_data,
+                        )
+                    )
+                    logger.info(
+                        f"Monitoring outcome for skipped email: {monitoring_outcome.get('message')}"
+                    )
+                except Exception as monitoring_error:
+                    logger.error(
+                        f"Error during monitoring for skipped email {email_id}: {str(monitoring_error)}"
+                    )
+                    # Do not let monitoring error block the original flow
+                # --- END MONITORING CALL ---
                 return {
                     "success": True,
                     "message": "Email skipped (too old or already replied)",
@@ -1186,6 +1218,29 @@ Based on this information, draft a helpful and appropriate reply.{' Remember to 
             reply_sent, response = await AutoReplyManager.generate_and_send_reply(
                 thread, user, db, use_html, classification
             )
+
+            # --- ADD MONITORING CALL HERE after reply attempt ---
+            try:
+                logger.info(
+                    f"Triggering monitoring check after reply attempt for email {email_id} in thread {thread_id}"
+                )
+                minimal_notification_data = {
+                    "message": {"data": {"emailMessageId": email_id}}
+                }
+                monitoring_outcome = (
+                    await ThreadMonitoringService.process_gmail_push_notification(
+                        user=user, db=db, notification_data=minimal_notification_data
+                    )
+                )
+                logger.info(
+                    f"Monitoring outcome after reply attempt: {monitoring_outcome.get('message')}"
+                )
+            except Exception as monitoring_error:
+                logger.error(
+                    f"Error during monitoring after reply attempt for {email_id}: {str(monitoring_error)}"
+                )
+                # Do not let monitoring error block the original flow
+            # --- END MONITORING CALL ---
 
             if reply_sent:
                 # Mark this message as processed to avoid duplicate replies
@@ -1217,6 +1272,31 @@ Based on this information, draft a helpful and appropriate reply.{' Remember to 
 
         except Exception as e:
             print(f"Error processing email {email_id}: {str(e)}")
+            # --- ADD MONITORING CALL HERE in case of processing error, if thread_id is known ---
+            if "thread_id" in locals() and thread_id:
+                try:
+                    logger.info(
+                        f"Triggering monitoring check after processing error for email {email_id} in thread {thread_id}"
+                    )
+                    minimal_notification_data = {
+                        "message": {"data": {"emailMessageId": email_id}}
+                    }
+                    monitoring_outcome = (
+                        await ThreadMonitoringService.process_gmail_push_notification(
+                            user=user,
+                            db=db,
+                            notification_data=minimal_notification_data,
+                        )
+                    )
+                    logger.info(
+                        f"Monitoring outcome after error: {monitoring_outcome.get('message')}"
+                    )
+                except Exception as monitoring_error:
+                    logger.error(
+                        f"Error during monitoring after processing error for {email_id}: {str(monitoring_error)}"
+                    )
+                    # Do not let monitoring error block the error flow
+            # --- END MONITORING CALL ---
             return {
                 "success": False,
                 "message": f"Error processing email: {str(e)}",

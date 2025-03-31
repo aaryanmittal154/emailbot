@@ -5,10 +5,14 @@ from pinecone import Pinecone, ServerlessSpec
 import time
 import json
 from app.services.embedding_service import EMBEDDING_DIMENSIONS
+import logging
 
 # Constants
 INDEX_NAME = "supperconnector"
 PINECONE_NAMESPACE = "email_threads"
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 
 class VectorDBService:
@@ -225,6 +229,71 @@ class VectorDBService:
         except Exception as e:
             print(f"Error getting index stats: {str(e)}")
             return {}
+
+    def get_thread_by_id(
+        self, user_id: int, thread_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve a specific thread by ID from the vector database
+
+        Args:
+            user_id: The ID of the user who owns the thread
+            thread_id: The ID of the thread to retrieve
+
+        Returns:
+            Thread metadata if found, None otherwise
+        """
+        try:
+            vector_id = f"user_{user_id}_{thread_id}"
+            fetch_response = self.index.fetch(
+                ids=[vector_id], namespace=f"{PINECONE_NAMESPACE}_{user_id}"
+            )
+
+            # Check if the vector was found in the response
+            if vector_id in fetch_response.vectors:
+                vector_data = fetch_response.vectors[vector_id]
+                # Access metadata directly from the vector data object
+                metadata = vector_data.metadata
+
+                if not metadata:
+                    logger.warning(f"Vector {vector_id} found but has no metadata.")
+                    return None
+
+                # Convert participants back from JSON string
+                try:
+                    participants = json.loads(metadata.get("participants", "[]"))
+                except json.JSONDecodeError:
+                    logger.warning(
+                        f"Could not decode participants JSON for thread {thread_id}"
+                    )
+                    participants = []  # Default to empty list
+
+                return {
+                    "thread_id": metadata.get(
+                        "thread_id", thread_id
+                    ),  # Use provided thread_id as fallback
+                    "subject": metadata.get("subject", ""),
+                    "participants": participants,
+                    "message_count": int(metadata.get("message_count", 0)),
+                    "last_updated": metadata.get("last_updated", ""),
+                    "text_preview": metadata.get("text_preview", ""),
+                    "full_content": metadata.get("full_content", ""),
+                    "category": metadata.get("category", ""),
+                }
+            else:
+                # Vector ID not found in the response vectors
+                logger.info(
+                    f"Thread {thread_id} (vector {vector_id}) not found in Pinecone fetch response."
+                )
+                return None
+
+        except Exception as e:
+            # Use logger for consistency
+            logger.error(
+                f"Error retrieving thread {thread_id} from Pinecone: {str(e)}",
+                exc_info=True,
+            )
+            return None
 
 
 # Create a singleton instance

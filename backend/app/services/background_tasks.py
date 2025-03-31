@@ -18,6 +18,8 @@ from app.models.user import User
 from app.models.gmail_rate_limit import GmailRateLimit
 from app.services.auth_service import get_google_creds
 from app.services.email_service import build_gmail_service
+from app.services.thread_monitoring_service import ThreadMonitoringService
+
 # Import AutoReplyManager at runtime to avoid circular imports
 
 # Set up logging
@@ -62,14 +64,16 @@ def update_user_check_stats(user_id: int, replied_count: int = 0):
     """
     # Update the last check time
     last_check_times[user_id] = datetime.now(timezone.utc)
-    
+
     # Initialize stats dictionary if it doesn't exist
     if user_id not in reply_statistics:
         reply_statistics[user_id] = {"total_replies_sent": 0}
-    
+
     # Update the total replies sent
     if replied_count > 0:
-        reply_statistics[user_id]["total_replies_sent"] = reply_statistics[user_id].get("total_replies_sent", 0) + replied_count
+        reply_statistics[user_id]["total_replies_sent"] = (
+            reply_statistics[user_id].get("total_replies_sent", 0) + replied_count
+        )
 
 
 async def check_emails_for_user(user: User, db: Session) -> Dict[str, Any]:
@@ -81,7 +85,9 @@ async def check_emails_for_user(user: User, db: Session) -> Dict[str, Any]:
         # Skip if user has an active rate limit
         active_limit = GmailRateLimit.get_active_limit(db, user.id)
         if active_limit:
-            logger.info(f"Skipping email check for user {user.id} due to rate limit until {active_limit.retry_after}")
+            logger.info(
+                f"Skipping email check for user {user.id} due to rate limit until {active_limit.retry_after}"
+            )
             # Still update the check time even if rate limited
             update_user_check_stats(user.id, 0)
             return {"success": False, "rate_limited": True}
@@ -92,7 +98,7 @@ async def check_emails_for_user(user: User, db: Session) -> Dict[str, Any]:
 
         # Get the last history ID we processed
         last_history_id = get_last_history_id(user.id)
-        
+
         if not last_history_id:
             # If we don't have a history ID yet, get the current one
             # This avoids processing existing emails on first run
@@ -100,29 +106,27 @@ async def check_emails_for_user(user: User, db: Session) -> Dict[str, Any]:
             last_history_id = profile.get("historyId")
             save_last_history_id(user.id, last_history_id)
             return {"success": True, "message": "Initialized history ID tracking"}
-        
+
         # Get all changes since the last history ID
         time_threshold = datetime.now(timezone.utc) - timedelta(hours=1)
-        
+
         # Use the AutoReplyManager to process the history (runtime import to avoid circular imports)
         from app.services.auto_reply_service import AutoReplyManager
+
         result = await AutoReplyManager.process_history_updates(
-            user=user,
-            db=db,
-            history_id=last_history_id,
-            time_threshold=time_threshold
+            user=user, db=db, history_id=last_history_id, time_threshold=time_threshold
         )
-        
+
         # Get the latest history ID from the result and save it
         if result.get("success") and "latest_history_id" in result:
             save_last_history_id(user.id, result["latest_history_id"])
-        
+
         # Update the user's statistics
         replied_count = result.get("replied_count", 0)
         update_user_check_stats(user.id, replied_count)
-        
+
         return result
-    
+
     except Exception as e:
         logger.error(f"Error checking emails for user {user.id}: {str(e)}")
         traceback.print_exc()
@@ -138,15 +142,15 @@ async def periodic_email_check():
         try:
             # Get a new database session for this check
             db = SessionLocal()
-            
+
             try:
                 # Get all users with auto-reply enabled
                 from app.api.routes.auto_reply import get_auto_reply_config
-                
+
                 # Query all users
                 users = db.query(User).all()
                 auto_reply_users = []
-                
+
                 # Filter to those with auto-reply enabled
                 for user in users:
                     try:
@@ -154,28 +158,30 @@ async def periodic_email_check():
                         if config.enabled:
                             auto_reply_users.append(user)
                     except Exception as user_error:
-                        logger.error(f"Error checking auto-reply config for user {user.id}: {str(user_error)}")
-                
+                        logger.error(
+                            f"Error checking auto-reply config for user {user.id}: {str(user_error)}"
+                        )
+
                 # Process users in batches
                 for i in range(0, len(auto_reply_users), BATCH_SIZE):
-                    batch = auto_reply_users[i:i+BATCH_SIZE]
-                    
+                    batch = auto_reply_users[i : i + BATCH_SIZE]
+
                     # Check emails for each user in the batch
                     for user in batch:
                         logger.info(f"Checking emails for user {user.id}")
                         await check_emails_for_user(user, db)
-                    
+
                     # Add a small delay between batches to avoid API rate limits
                     if i + BATCH_SIZE < len(auto_reply_users):
                         await asyncio.sleep(2)
-            
+
             finally:
                 # Always close the database session
                 db.close()
-            
+
             # Wait until the next check interval
             await asyncio.sleep(CHECK_INTERVAL)
-        
+
         except Exception as e:
             logger.error(f"Error in periodic email check: {str(e)}")
             traceback.print_exc()
@@ -190,7 +196,7 @@ def _run_background_tasks():
     """
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
+
     # Start the periodic email check
     loop.run_until_complete(periodic_email_check())
     loop.close()
@@ -202,18 +208,18 @@ def start_background_tasks():
     This should be called when the application starts.
     """
     global task_thread, should_continue
-    
+
     # Don't start if already running
     if task_thread and task_thread.is_alive():
         return
-    
+
     # Set the flag to allow the loop to run
     should_continue = True
-    
+
     # Start the background thread
     task_thread = threading.Thread(target=_run_background_tasks, daemon=True)
     task_thread.start()
-    
+
     logger.info("Started background tasks for email checking")
 
 
@@ -225,3 +231,30 @@ def stop_background_tasks():
     global should_continue
     should_continue = False
     logger.info("Stopping background tasks")
+
+
+async def run_background_checks(user_id: int, task_id: str = None):
+    """Run periodic background checks for a specific user"""
+    # ...existing code...
+
+    # Add thread monitoring check
+    try:
+        logger.info(f"Checking monitored threads for user {user_id}")
+        # Get user and db session
+        db = SessionLocal()
+        user = db.query(User).filter(User.id == user_id).first()
+
+        if user:
+            # Check for updates in monitored threads
+            thread_result = await ThreadMonitoringService.check_for_thread_updates(
+                user=user, db=db, max_results=50  # Limit to 50 threads per check
+            )
+
+            logger.info(f"Thread monitoring check complete: {thread_result['message']}")
+
+    except Exception as e:
+        logger.error(f"Error in thread monitoring background check: {str(e)}")
+    finally:
+        db.close()
+
+    # ...rest of the function...
