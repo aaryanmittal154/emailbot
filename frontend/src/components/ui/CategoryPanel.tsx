@@ -12,10 +12,21 @@ import {
   Icon,
   LinkBox,
   LinkOverlay,
+  HStack,
 } from "@chakra-ui/react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronRightIcon, TimeIcon, RepeatIcon } from "@chakra-ui/icons";
 import { EmailCard } from "./EmailCard";
+import {
+  staggerContainer,
+  listItem,
+  fadeIn,
+  fadeInUp,
+  scaleIn,
+  buttonHover,
+  buttonTap,
+  transitions,
+} from "../../lib/animations";
 
 interface Email {
   id: string;
@@ -53,6 +64,9 @@ interface CategoryPanelProps {
 }
 
 const MotionBox = motion(Box);
+const MotionFlex = motion(Flex);
+const MotionButton = motion(Button);
+const MotionVStack = motion(VStack);
 
 const CategoryPanel: React.FC<CategoryPanelProps> = ({
   title,
@@ -66,9 +80,12 @@ const CategoryPanel: React.FC<CategoryPanelProps> = ({
   animation = "fadeIn",
 }) => {
   const [isHovered, setIsHovered] = useState(false);
-  const bgColor = useColorModeValue("white", "gray.800");
-  const borderColor = useColorModeValue("gray.200", "gray.700");
-  const headerBgColor = useColorModeValue("gray.50", "gray.900");
+
+  // Updated color variables with new space color palette
+  const bgColor = useColorModeValue("white", "space.800");
+  const borderColor = useColorModeValue("space.100", "space.700");
+  const headerBgColor = useColorModeValue("space.50", "space.900");
+  const emptyStateBg = useColorModeValue("space.50", "space.800");
 
   // Add debugging for emails array
   useEffect(() => {
@@ -85,45 +102,13 @@ const CategoryPanel: React.FC<CategoryPanelProps> = ({
   const getAnimationVariants = () => {
     switch (animation) {
       case "fadeIn":
-        return {
-          hidden: { opacity: 0 },
-          visible: {
-            opacity: 1,
-            transition: {
-              duration: 0.5,
-              staggerChildren: 0.1,
-            },
-          },
-        };
+        return fadeIn;
       case "slideUp":
-        return {
-          hidden: { opacity: 0, y: 20 },
-          visible: {
-            opacity: 1,
-            y: 0,
-            transition: {
-              duration: 0.4,
-              staggerChildren: 0.1,
-            },
-          },
-        };
+        return fadeInUp;
       case "scale":
-        return {
-          hidden: { opacity: 0, scale: 0.8 },
-          visible: {
-            opacity: 1,
-            scale: 1,
-            transition: {
-              duration: 0.3,
-              staggerChildren: 0.1,
-            },
-          },
-        };
+        return scaleIn;
       default:
-        return {
-          hidden: {},
-          visible: {},
-        };
+        return {};
     }
   };
 
@@ -137,6 +122,7 @@ const CategoryPanel: React.FC<CategoryPanelProps> = ({
       "Discussion Topics": "teal",
       Other: "gray",
       "All Emails": "brand",
+      Irrelevant: "gray",
     };
 
     return categoryColors[category] || "gray";
@@ -144,14 +130,18 @@ const CategoryPanel: React.FC<CategoryPanelProps> = ({
 
   const colorScheme = getCategoryColor(category);
 
-  // Create variants for animations
+  // Animation variants
   const containerVariants = getAnimationVariants();
-  const itemVariants = {
-    hidden: { opacity: 0, y: 10 },
-    visible: {
-      opacity: 1,
-      y: 0,
-      transition: { duration: 0.3 },
+
+  // Custom hover styles for the panel
+  const panelHoverStyle = {
+    y: -4,
+    boxShadow: "xl",
+    borderColor: `${colorScheme}.200`,
+    transition: {
+      type: "spring",
+      stiffness: 400,
+      damping: 30,
     },
   };
 
@@ -159,31 +149,34 @@ const CategoryPanel: React.FC<CategoryPanelProps> = ({
     <MotionBox
       initial="hidden"
       animate="visible"
+      exit="exit"
       variants={containerVariants}
       border="1px solid"
       borderColor={borderColor}
       borderRadius="xl"
       bg={bgColor}
-      boxShadow={isHovered ? "lg" : "md"}
+      boxShadow={isHovered ? "xl" : "lg"}
       overflow="hidden"
-      transition="all 0.3s ease"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       height="100%"
       display="flex"
       flexDirection="column"
+      position="relative"
+      whileHover={panelHoverStyle}
     >
       {/* Header */}
       <Flex
-        p={4}
+        p={5}
         align="center"
         justify="space-between"
         borderBottomWidth="1px"
         borderBottomColor={borderColor}
         bg={headerBgColor}
+        position="relative"
       >
         <Flex align="center">
-          <Heading size="md" fontWeight="semibold">
+          <Heading size="md" fontWeight="400" letterSpacing="0.01em">
             {title}
           </Heading>
           {badgeCount !== undefined && badgeCount > 0 && (
@@ -192,113 +185,143 @@ const CategoryPanel: React.FC<CategoryPanelProps> = ({
               colorScheme={colorScheme}
               borderRadius="full"
               px={2}
-              py={0.5}
+              py={1}
+              fontWeight="500"
             >
               {badgeCount}
             </Badge>
           )}
         </Flex>
-        <Button
+
+        <MotionButton
+          rightIcon={<RepeatIcon />}
           size="sm"
-          leftIcon={<RepeatIcon />}
-          onClick={onRefresh}
-          colorScheme={colorScheme}
           variant="ghost"
-          _hover={{
-            bg: `${colorScheme}.50`,
-          }}
+          onClick={onRefresh}
+          borderRadius="full"
+          fontWeight="400"
+          color="space.600"
+          _hover={{ bg: "space.50", color: "brand.500" }}
+          whileHover={buttonHover}
+          whileTap={buttonTap}
         >
           Refresh
-        </Button>
+        </MotionButton>
       </Flex>
 
       {/* Content */}
-      <Box
-        flex="1"
-        p={4}
-        overflowY="auto"
-        css={{
-          "&::-webkit-scrollbar": {
-            width: "4px",
-          },
-          "&::-webkit-scrollbar-track": {
-            width: "6px",
-          },
-          "&::-webkit-scrollbar-thumb": {
-            background: "#cbd5e0",
-            borderRadius: "24px",
-          },
-        }}
-      >
-        <AnimatePresence>
+      <Box flex="1" overflowY="auto" px={3} py={3}>
+        <AnimatePresence mode="wait">
           {isLoading ? (
-            <VStack spacing={4} align="stretch">
+            <MotionVStack
+              spacing={3}
+              align="stretch"
+              py={2}
+              variants={staggerContainer}
+              initial="hidden"
+              animate="visible"
+            >
               {[...Array(3)].map((_, i) => (
-                <MotionBox key={i} variants={itemVariants}>
-                  <Skeleton height="110px" borderRadius="lg" />
+                <MotionBox
+                  key={`skeleton-${i}`}
+                  variants={listItem}
+                  mb={3}
+                  px={2}
+                >
+                  <Skeleton height="80px" width="100%" borderRadius="lg" />
                 </MotionBox>
               ))}
-            </VStack>
-          ) : emails.length > 0 ? (
-            <VStack spacing={4} align="stretch">
-              {emails.map((email) => {
-                // Handle both modern and classic email formats
-                const senderObject =
-                  typeof email.sender === "object"
-                    ? email.sender
-                    : {
-                        name:
-                          typeof email.sender === "string" &&
-                          email.sender.includes("<")
-                            ? email.sender.split("<")[0].trim()
-                            : typeof email.sender === "string"
-                            ? email.sender.split("@")[0]
-                            : "Unknown",
-                        email:
-                          typeof email.sender === "string" &&
-                          email.sender.includes("<")
-                            ? email.sender.match(/<([^>]+)>/)![1]
-                            : typeof email.sender === "string"
-                            ? email.sender
-                            : "unknown@example.com",
-                      };
-
-                return (
-                  <MotionBox key={email.id} variants={itemVariants}>
-                    <EmailCard
-                      id={email.id}
-                      thread_id={email.thread_id}
-                      subject={email.subject}
-                      sender={senderObject}
-                      preview={email.snippet || email.preview || ""}
-                      timestamp={email.date || email.timestamp || ""}
-                      isRead={email.is_read || email.isRead || false}
-                      hasAttachment={
-                        email.has_attachment || email.hasAttachment || false
-                      }
-                      labels={email.labels || []}
-                      category={category}
-                      onClick={() => onEmailSelect(email)}
-                    />
-                  </MotionBox>
-                );
-              })}
-            </VStack>
+            </MotionVStack>
+          ) : emails && emails.length > 0 ? (
+            <MotionVStack
+              spacing={3}
+              align="stretch"
+              py={2}
+              variants={staggerContainer}
+              initial="hidden"
+              animate="visible"
+            >
+              {emails.map((email) => (
+                <MotionBox
+                  key={email.id || email.thread_id}
+                  variants={listItem}
+                >
+                  <EmailCard
+                    email={email}
+                    onClick={() => onEmailSelect(email)}
+                    colorScheme={colorScheme}
+                  />
+                </MotionBox>
+              ))}
+            </MotionVStack>
           ) : (
-            <Flex
+            <MotionFlex
               direction="column"
               align="center"
               justify="center"
-              height="200px"
-              color="gray.500"
+              p={6}
+              my={4}
+              h="200px"
+              bg={emptyStateBg}
+              borderRadius="xl"
               textAlign="center"
+              variants={fadeInUp}
+              initial="hidden"
+              animate="visible"
             >
-              <Icon as={TimeIcon} boxSize={10} mb={4} />
-              <Text>{emptyMessage}</Text>
-            </Flex>
+              <Icon
+                as={TimeIcon}
+                boxSize={8}
+                color={`${colorScheme}.300`}
+                mb={4}
+              />
+              <Text color="space.500" fontWeight="400">
+                {emptyMessage}
+              </Text>
+              <MotionButton
+                mt={4}
+                size="sm"
+                variant="outline"
+                colorScheme={colorScheme}
+                onClick={onRefresh}
+                borderRadius="full"
+                fontWeight="400"
+                leftIcon={<RepeatIcon />}
+                whileHover={buttonHover}
+                whileTap={buttonTap}
+              >
+                Refresh
+              </MotionButton>
+            </MotionFlex>
           )}
         </AnimatePresence>
       </Box>
+
+      {/* Footer */}
+      {!isLoading && emails && emails.length > 0 && (
+        <Box
+          p={4}
+          borderTopWidth="1px"
+          borderTopColor={borderColor}
+          textAlign="center"
+        >
+          <MotionButton
+            rightIcon={<ChevronRightIcon />}
+            variant="ghost"
+            size="sm"
+            width="full"
+            onClick={() => {}}
+            borderRadius="full"
+            fontWeight="400"
+            color="space.600"
+            _hover={{ bg: "space.50", color: "brand.500" }}
+            whileHover={buttonHover}
+            whileTap={buttonTap}
+          >
+            View All
+          </MotionButton>
+        </Box>
+      )}
     </MotionBox>
   );
 };

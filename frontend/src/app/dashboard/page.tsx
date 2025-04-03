@@ -39,8 +39,15 @@ import {
   useDisclosure,
   Tooltip,
   HStack,
+  Switch,
+  FormLabel,
 } from "@chakra-ui/react";
-import { ArrowBackIcon, ChevronDownIcon, InfoIcon } from "@chakra-ui/icons";
+import {
+  ArrowBackIcon,
+  ChevronDownIcon,
+  InfoIcon,
+  SearchIcon,
+} from "@chakra-ui/icons";
 import { FiSettings, FiLogOut, FiMail, FiRefreshCw } from "react-icons/fi";
 import axios from "axios";
 import AutoReplyButton from "../../components/AutoReplyButton";
@@ -64,8 +71,16 @@ import {
   getNewEmails,
   refreshEmailsFromDatabase,
   getCurrentUser,
+  getBackgroundServiceOAuthUrl,
 } from "../../lib/api";
 import PromptManagement from "../../components/PromptManagement";
+import {
+  getBackgroundServiceStatus,
+  toggleBackgroundService,
+} from "../../lib/backgroundServiceApi";
+import { motion } from "framer-motion";
+import DashboardLayout from "../../components/ui/DashboardLayout";
+import he from "he"; // Add this import
 
 const BASE_URL = "https://emailbot-k8s7.onrender.com";
 
@@ -125,6 +140,80 @@ interface SearchResponse {
   count: number;
 }
 
+// Helper function to decode HTML entities
+const decodeHtmlEntities = (text: string | null | undefined): string => {
+  if (!text) return "";
+  try {
+    // Use a library like 'he' for robust decoding
+    return he.decode(text);
+  } catch (e) {
+    console.error("Error decoding HTML entities:", e);
+    // Fallback: basic replacements (less reliable)
+    return text
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&amp;/g, "&")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'");
+  }
+};
+
+// Function to extract and clean the relevant HTML part
+const getCleanHtmlBody = (rawBody: string | null | undefined): string => {
+  if (!rawBody) return "";
+
+  const escapedDivMatch = rawBody.match(
+    /(&lt;div.*?&gt;(?:.|\n)*?&lt;\/div&gt;)/s
+  ); // Find outermost escaped div
+  const unescapedDivMatch = rawBody.match(/(<div.*?>(?:.|\n)*?<\/div>)/s); // Find outermost unescaped div
+
+  // Case 1: Both unescaped and escaped divs are present (common in replies)
+  // Prioritize the unescaped version as it's likely the main HTML part intended for rendering this message segment.
+  if (unescapedDivMatch && unescapedDivMatch[1] && escapedDivMatch) {
+    console.log(
+      "getCleanHtmlBody: Found both unescaped and escaped HTML, using unescaped."
+    );
+    // Decode entities just in case some exist within the unescaped block
+    return decodeHtmlEntities(unescapedDivMatch[1]);
+  }
+
+  // Case 2: Only escaped HTML div is present
+  if (escapedDivMatch && escapedDivMatch[1] && !unescapedDivMatch) {
+    console.log(
+      "getCleanHtmlBody: Found only escaped HTML, decoding and using it."
+    );
+    return decodeHtmlEntities(escapedDivMatch[1]);
+  }
+
+  // Case 3: Only unescaped HTML div is present (or no escaped found)
+  if (unescapedDivMatch && unescapedDivMatch[1]) {
+    console.log(
+      "getCleanHtmlBody: Found unescaped HTML (or no escaped), using it."
+    );
+    // Decode entities just in case some exist within the block
+    return decodeHtmlEntities(unescapedDivMatch[1]);
+  }
+
+  // Case 4: No <div> blocks found, check for other common HTML tags like <p>
+  if (
+    rawBody.match(/<p.*?>/i) ||
+    rawBody.match(/<span.*?>/i) ||
+    rawBody.match(/<a href/i)
+  ) {
+    console.log("getCleanHtmlBody: Found other HTML tags, decoding full body.");
+    // Assume the whole body is intended as HTML, decode potential entities
+    return decodeHtmlEntities(rawBody);
+  }
+
+  // Case 5: Fallback - Assume plain text
+  // Decode entities and convert newlines to <br> for rendering.
+  console.log(
+    "getCleanHtmlBody: No significant HTML found, treating as plain text."
+  );
+  // Use regex \r?\n to handle both LF and CRLF line endings
+  return decodeHtmlEntities(rawBody).replace(/\r?\n/g, "<br />");
+};
+
 export default function Dashboard() {
   const router = useRouter();
   const toast = useToast();
@@ -174,6 +263,17 @@ export default function Dashboard() {
   const [tabIndex, setTabIndex] = useState(0);
   // Add state for onboarding modal
   const [showOnboardingModal, setShowOnboardingModal] = useState(false);
+
+  // Map thread IDs to their primary category for efficient Inbox label display
+  const [threadIdToCategoryMap, setThreadIdToCategoryMap] = useState<
+    Map<string, string>
+  >(new Map());
+
+  // State for background auto-reply service
+  const [isAutoReplyEnabled, setIsAutoReplyEnabled] = useState(false);
+  const [isLoadingAutoReplyStatus, setIsLoadingAutoReplyStatus] =
+    useState(true);
+  const [isTogglingAutoReply, setIsTogglingAutoReply] = useState(false); // Prevent double toggles
 
   useEffect(() => {
     const token = localStorage.getItem("auth_token");
@@ -234,6 +334,29 @@ export default function Dashboard() {
 
           // Also fetch labeled emails from database
           await fetchLabeledEmails();
+
+          // Fetch background service status
+          try {
+            console.log("Fetching background service status...");
+            const statusResponse = await getBackgroundServiceStatus();
+            console.log("Background service status:", statusResponse.data);
+            setIsAutoReplyEnabled(statusResponse.data.is_enabled);
+          } catch (statusError) {
+            console.error(
+              "Error fetching background service status:",
+              statusError
+            );
+            toast({
+              title: "Error fetching settings",
+              description:
+                "Could not load the status of the background auto-reply service.",
+              status: "error",
+              duration: 5000,
+              isClosable: true,
+            });
+          } finally {
+            setIsLoadingAutoReplyStatus(false);
+          }
         }
       } catch (error) {
         console.error("Error fetching user data:", error);
@@ -270,6 +393,18 @@ export default function Dashboard() {
     if (user) {
       // Fetch labeled emails for each category
       fetchLabeledEmails();
+
+      // Check if there's a thread parameter in the URL
+      if (typeof window !== "undefined") {
+        const urlParams = new URLSearchParams(window.location.search);
+        const threadId = urlParams.get("thread");
+
+        if (threadId) {
+          // If there's a thread ID in the URL, fetch and display that thread
+          console.log(`Loading thread from URL parameter: ${threadId}`);
+          fetchThread(threadId);
+        }
+      }
     }
   }, [user]);
 
@@ -293,6 +428,24 @@ export default function Dashboard() {
     };
   }, [isCheckingEmails]); // Dependency array includes isCheckingEmails to prevent concurrent checks
 
+  useEffect(() => {
+    // Set up a handler for browser history pop state (back/forward buttons)
+    const handlePopState = (event: PopStateEvent) => {
+      if (event.state === null || event.state.view === "inbox") {
+        // User navigated back to inbox view
+        closeThread();
+      }
+    };
+
+    // Add the event listener
+    window.addEventListener("popstate", handlePopState);
+
+    // Clean up event listener on component unmount
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, []);
+
   const fetchEmails = async (page = 1, append = false) => {
     try {
       // Check if token exists before making request
@@ -315,12 +468,21 @@ export default function Dashboard() {
       // Use the user's preferred email count
       const emailCount = user?.max_emails_to_index || 10;
 
-      const response = await axios.get("/api/emails", {
+      // Construct the absolute URL using the environment variable
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"; // Provide a fallback if needed
+      const endpoint = `${apiUrl}/api/emails/`;
+
+      console.log(`Making request to: ${endpoint}`); // Log the exact URL being called
+
+      const response = await axios.get(endpoint, {
         params: {
           page,
           page_size: emailCount,
-          priority_categories: ["Job Posting", "Candidate"],
-          t: timestamp, // Cache-busting parameter
+          // priority_categories: ["Job Posting", "Candidate"], // Keep commented out unless needed
+          group_threads: true,
+          include_latest_per_thread: true,
+          refresh_db: true, // Add this line to force DB query on backend
+          t: timestamp,
         },
       });
 
@@ -390,7 +552,10 @@ export default function Dashboard() {
         isClosable: true,
       });
 
-      await axios.post("/api/emails/sync", { max_results: 500 });
+      await axios.post("/api/emails/sync", {
+        max_results: 500,
+        apply_thread_grouping: true,
+      });
 
       toast({
         title: "Sync started",
@@ -461,6 +626,13 @@ export default function Dashboard() {
       const threadData = response.data;
       console.log("Thread data:", threadData);
 
+      // Add a state to browser history for this email view
+      window.history.pushState(
+        { view: "email", threadId },
+        "",
+        `?thread=${threadId}`
+      );
+
       // Check if this thread has a specific category label
       const threadLabels = threadData.labels || [];
       const categoryLabels = [
@@ -477,13 +649,39 @@ export default function Dashboard() {
         console.log(
           `Thread has category: ${matchedCategory}, opening in specialized view`
         );
-        // If this email belongs to a category, use the specialized view by calling handleSelectLabeledEmail
-        await handleSelectLabeledEmail(threadData, matchedCategory);
-        // Don't clear selectedThread completely - just set isThreadLoading to false
+        // For all categorized emails, first just display the thread without classification
+        setSelectedLabeledEmail({
+          ...threadData,
+          category: matchedCategory,
+        });
+
+        // If in inbox tab, also set selectedThread to null to ensure we don't show both views
+        if (tabIndex === 0) {
+          setSelectedThread(null);
+        }
+
         setIsThreadLoading(false);
+        setIsEmailContentLoading(false);
+
+        // Auto-load details for Job Posting and Candidate emails
+        if (
+          matchedCategory === "Job Posting" ||
+          matchedCategory === "Candidate"
+        ) {
+          // Add a small delay to ensure the UI is updated first
+          setTimeout(() => {
+            loadEmailDetails();
+          }, 500);
+        }
       } else {
         // If no category, just show the regular thread view
         setSelectedThread(threadData);
+
+        // Clear any selected labeled email
+        setSelectedLabeledEmail(null);
+
+        setIsThreadLoading(false);
+        setIsEmailContentLoading(false);
       }
     } catch (error: any) {
       console.error("Error fetching thread:", error);
@@ -494,10 +692,35 @@ export default function Dashboard() {
         duration: 5000,
         isClosable: true,
       });
-    } finally {
       setIsThreadLoading(false);
       setIsEmailContentLoading(false);
     }
+  };
+
+  // Helper function to format sender names consistently
+  const formatSenderName = (sender: string) => {
+    if (!sender) return "Unknown";
+
+    // If it's just an email address without a name
+    if (sender.includes("@") && !sender.includes("<")) {
+      // Try to extract a name from the email
+      const namePart = sender.split("@")[0];
+      // Convert to title case and replace dots/underscores with spaces
+      return namePart
+        .split(/[._]/)
+        .map(
+          (part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase()
+        )
+        .join(" ");
+    }
+
+    // If it's in the format "Name <email@example.com>"
+    if (sender.includes("<")) {
+      const name = sender.split("<")[0].trim();
+      return name || "Unknown";
+    }
+
+    return sender;
   };
 
   const formatDate = (dateString: string) => {
@@ -512,7 +735,14 @@ export default function Dashboard() {
   };
 
   const closeThread = () => {
+    // Add or replace a history state for the inbox view
+    window.history.pushState({ view: "inbox" }, "", "?");
+
     setSelectedThread(null);
+    setSelectedLabeledEmail(null);
+    setExtractedFields(null);
+    setTopMatches([]);
+    setSharedCandidates([]);
   };
 
   // Add semantic search function
@@ -614,6 +844,32 @@ export default function Dashboard() {
         getEmailsByLabel("Irrelevant", { refresh_db: true, t: cacheBuster }),
       ]);
 
+      // Create the mapping from thread_id to category
+      const newMap = new Map<string, string>();
+      const categories = {
+        "Job Posting": jobPostingsRes.data || [],
+        Candidate: candidatesRes.data || [],
+        Event: eventsRes.data || [],
+        Questions: questionsRes.data || [],
+        "Discussion Topics": discussionsRes.data || [],
+        Other: otherRes.data || [],
+        Irrelevant: irrelevantRes.data || [],
+      };
+
+      for (const [categoryName, emailsInCategory] of Object.entries(
+        categories
+      )) {
+        if (Array.isArray(emailsInCategory)) {
+          emailsInCategory.forEach((email: any) => {
+            if (email && email.thread_id) {
+              newMap.set(email.thread_id, categoryName);
+            }
+          });
+        }
+      }
+      setThreadIdToCategoryMap(newMap);
+      console.log("Updated threadIdToCategoryMap:", newMap);
+
       // Sort function for emails (newest first)
       const sortByDate = (emails: any[]) => {
         return [...emails].sort((a, b) => {
@@ -651,8 +907,20 @@ export default function Dashboard() {
       // Show loading indicator immediately
       setIsEmailContentLoading(true);
 
+      // Clear previously loaded details
+      setExtractedFields(null);
+      setTopMatches([]);
+      setSharedCandidates([]);
+
       let thread = email;
       let threadResponse;
+
+      // Add a state to browser history for this email view
+      window.history.pushState(
+        { view: "email", threadId: email.thread_id },
+        "",
+        `?category=${category}&thread=${email.thread_id}`
+      );
 
       // Check if we need to fetch the full thread (if the passed email doesn't have complete data)
       if (!email.messages) {
@@ -662,14 +930,56 @@ export default function Dashboard() {
         thread = threadResponse.data;
       }
 
-      // Then get the classified fields
+      // First just display the thread without classification
+      setSelectedLabeledEmail({
+        ...thread,
+        category,
+      });
+
+      // Turn off loading indicator to show the email quickly
+      setIsEmailContentLoading(false);
+
+      // For Job Posting and Candidate emails, auto-load details in the background
+      if (category === "Job Posting" || category === "Candidate") {
+        // Small delay to ensure the UI has updated first
+        setTimeout(() => {
+          loadEmailDetails();
+        }, 500);
+      }
+    } catch (error: any) {
+      console.error("Error fetching email content:", error);
+      toast({
+        title: "Error fetching email content",
+        description:
+          error.message || "An error occurred while fetching email content",
+        status: "error",
+        duration: 5000,
+        isClosable: true,
+      });
+      setIsEmailContentLoading(false);
+    }
+  };
+
+  // New function to load email details (classification and matches) on demand
+  const loadEmailDetails = async () => {
+    if (!selectedLabeledEmail) return;
+
+    const thread = selectedLabeledEmail;
+    const category = selectedLabeledEmail.category;
+
+    // Only proceed for Job Posting and Candidate categories
+    if (category !== "Job Posting" && category !== "Candidate") return;
+
+    try {
+      setIsEmailContentLoading(true);
+
+      // Get the classified fields
       console.log(`Classifying thread ${thread.thread_id}`);
       const classificationResponse = await classifyThread(thread.thread_id);
       const classification = classificationResponse.data;
 
       setSelectedLabeledEmail({
         ...thread,
-        category,
         classification_data: classification,
       });
       setExtractedFields(classification.fields);
@@ -726,8 +1036,7 @@ export default function Dashboard() {
 
         setTopMatches(similarThreads);
 
-        // For now, we'll keep the mock shared candidates data
-        // In a real implementation, this would be another API call
+        // For job postings, set mock shared candidates data
         if (category === "Job Posting") {
           setSharedCandidates([
             {
@@ -770,18 +1079,18 @@ export default function Dashboard() {
         });
       } finally {
         setIsLoadingMatches(false);
-        setIsEmailContentLoading(false);
       }
     } catch (error: any) {
-      console.error("Error fetching email content:", error);
+      console.error("Error fetching email details:", error);
       toast({
-        title: "Error fetching email content",
+        title: "Error fetching email details",
         description:
-          error.message || "An error occurred while fetching email content",
+          error.message || "An error occurred while loading email details",
         status: "error",
         duration: 5000,
         isClosable: true,
       });
+    } finally {
       setIsEmailContentLoading(false);
     }
   };
@@ -1207,18 +1516,24 @@ export default function Dashboard() {
       );
     }
 
+    // Function to handle back button click
+    const handleBackClick = () => {
+      // Use browser's history back if available
+      if (window.history.state && window.history.state.view === "email") {
+        window.history.back();
+      } else {
+        // Fallback to manual state clearing
+        window.history.pushState({ view: "inbox" }, "", "?");
+        setSelectedLabeledEmail(null);
+        setExtractedFields(null);
+        setTopMatches([]);
+        setSharedCandidates([]);
+      }
+    };
+
     return (
       <Box>
-        <Button
-          leftIcon={<ArrowBackIcon />}
-          onClick={() => {
-            setSelectedLabeledEmail(null);
-            setExtractedFields(null);
-            setTopMatches([]);
-            setSharedCandidates([]);
-          }}
-          mb={4}
-        >
+        <Button leftIcon={<ArrowBackIcon />} onClick={handleBackClick} mb={4}>
           Back to List
         </Button>
 
@@ -1459,7 +1774,10 @@ export default function Dashboard() {
             {/* Render top job matches */}
             {renderTopMatches()}
           </Box>
-        ) : selectedLabeledEmail.category === "Candidate" ? (
+        ) : (selectedLabeledEmail.category === "Job Posting" ||
+            selectedLabeledEmail.category === "Candidate") &&
+          !extractedFields ? (
+          // Show email with loading indicator for details that are loading in background
           <Box
             p={5}
             shadow="md"
@@ -1467,14 +1785,33 @@ export default function Dashboard() {
             borderRadius="md"
             mb={4}
             borderLeftWidth="4px"
-            borderLeftColor="red.500"
+            borderLeftColor={
+              selectedLabeledEmail.category === "Job Posting"
+                ? "blue.500"
+                : "red.500"
+            }
           >
-            <Heading size="md" color="red.600">
+            <Heading
+              size="md"
+              color={
+                selectedLabeledEmail.category === "Job Posting"
+                  ? "blue.600"
+                  : "red.600"
+              }
+            >
               {selectedLabeledEmail.subject?.replace(/^Re:\s*/i, "")}
             </Heading>
 
             <Flex mt={4} gap={2} flexWrap="wrap">
-              <Badge colorScheme="red" fontSize="0.9em" p={1}>
+              <Badge
+                colorScheme={
+                  selectedLabeledEmail.category === "Job Posting"
+                    ? "blue"
+                    : "red"
+                }
+                fontSize="0.9em"
+                p={1}
+              >
                 {selectedLabeledEmail.category}
               </Badge>
               <Badge colorScheme="gray" fontSize="0.9em" p={1}>
@@ -1485,21 +1822,58 @@ export default function Dashboard() {
               </Badge>
             </Flex>
 
-            <Box mt={5} p={4} bg="red.50" borderRadius="md">
-              <Heading size="sm" mb={3}>
-                Candidate Information
-              </Heading>
-              <Text mb={4}>
-                This candidate's information is available in the email thread
-                below.
-              </Text>
-              <Button colorScheme="red" size="sm">
-                Contact Candidate
-              </Button>
+            <Box
+              mt={5}
+              p={4}
+              bg={
+                selectedLabeledEmail.category === "Job Posting"
+                  ? "blue.50"
+                  : "red.50"
+              }
+              borderRadius="md"
+            >
+              {isLoadingMatches || isEmailContentLoading ? (
+                <Flex direction="column" align="center" p={4}>
+                  <Spinner
+                    size="md"
+                    color={
+                      selectedLabeledEmail.category === "Job Posting"
+                        ? "blue.500"
+                        : "red.500"
+                    }
+                    mb={3}
+                  />
+                  <Text>
+                    Loading{" "}
+                    {selectedLabeledEmail.category === "Job Posting"
+                      ? "job"
+                      : "candidate"}{" "}
+                    details...
+                  </Text>
+                </Flex>
+              ) : (
+                <>
+                  <Text fontSize="md" mb={4}>
+                    Click below to load detailed information about this{" "}
+                    {selectedLabeledEmail.category === "Job Posting"
+                      ? "job posting"
+                      : "candidate"}
+                    .
+                  </Text>
+                  <Button
+                    colorScheme={
+                      selectedLabeledEmail.category === "Job Posting"
+                        ? "blue"
+                        : "red"
+                    }
+                    onClick={loadEmailDetails}
+                    leftIcon={<InfoIcon />}
+                  >
+                    Load Details
+                  </Button>
+                </>
+              )}
             </Box>
-
-            {/* Render top job matches */}
-            {renderTopMatches()}
           </Box>
         ) : (
           <Box p={5} shadow="md" borderWidth="1px" borderRadius="md" mb={4}>
@@ -1523,41 +1897,41 @@ export default function Dashboard() {
           </Box>
         )}
 
-        {extractedFields &&
-          selectedLabeledEmail.category !== "Job Posting" &&
-          selectedLabeledEmail.category !== "Candidate" &&
-          renderExtractedFields(extractedFields, selectedLabeledEmail.category)}
-
         <Heading size="md" mb={3}>
           Original Email Thread
         </Heading>
         <VStack spacing={4} align="stretch">
-          {selectedLabeledEmail.messages?.map((message: any, index: number) => (
-            <Box
-              key={message.gmail_id}
-              p={4}
-              borderWidth="1px"
-              borderRadius="md"
-              bg={message.is_read ? "white" : "blue.50"}
-            >
-              <Flex justify="space-between" mb={2}>
-                <Text fontWeight="bold">{message.sender}</Text>
-                <Text fontSize="sm" color="gray.500">
-                  {formatDate(message.date)}
-                </Text>
-              </Flex>
-              {message.body ? (
-                <Box
-                  dangerouslySetInnerHTML={{ __html: message.body }}
-                  className="email-body"
-                  mt={2}
-                  mb={2}
-                />
-              ) : (
-                <Text mb={2}>{message.snippet}</Text>
-              )}
-            </Box>
-          ))}
+          {selectedLabeledEmail.messages?.map((message: any, index: number) => {
+            const cleanBody = getCleanHtmlBody(message.body); // Get cleaned body
+            return (
+              <Box
+                key={message.gmail_id}
+                p={4}
+                borderWidth="1px"
+                borderRadius="md"
+                bg={message.is_read ? "white" : "blue.50"}
+              >
+                <Flex justify="space-between" mb={2}>
+                  <Text fontWeight="bold">
+                    {formatSenderName(message.sender)}
+                  </Text>
+                  <Text fontSize="sm" color="gray.500">
+                    {formatDate(message.date)}
+                  </Text>
+                </Flex>
+                {cleanBody ? ( // Use cleaned body
+                  <Box
+                    dangerouslySetInnerHTML={{ __html: cleanBody }} // Render cleaned body
+                    className="email-body"
+                    mt={2}
+                    mb={2}
+                  />
+                ) : (
+                  <Text mb={2}>{message.snippet}</Text> // Fallback to snippet
+                )}
+              </Box>
+            );
+          })}
         </VStack>
       </Box>
     );
@@ -1584,9 +1958,20 @@ export default function Dashboard() {
       );
     }
 
+    // Function to handle back button click
+    const handleBackClick = () => {
+      // Use browser's history back if available
+      if (window.history.state && window.history.state.view === "email") {
+        window.history.back();
+      } else {
+        // Fallback to explicit closeThread
+        closeThread();
+      }
+    };
+
     return (
       <Box p={4}>
-        <Button mb={4} onClick={closeThread}>
+        <Button mb={4} onClick={handleBackClick}>
           Back to Inbox
         </Button>
         <Box p={5} shadow="md" borderWidth="1px" borderRadius="md" mb={4}>
@@ -1608,32 +1993,37 @@ export default function Dashboard() {
         </Box>
 
         <VStack spacing={4} align="stretch">
-          {selectedThread.messages.map((message, index) => (
-            <Box
-              key={message.gmail_id}
-              p={4}
-              borderWidth="1px"
-              borderRadius="md"
-              bg={message.is_read ? "white" : "blue.50"}
-            >
-              <Flex justify="space-between" mb={2}>
-                <Text fontWeight="bold">{message.sender}</Text>
-                <Text fontSize="sm" color="gray.500">
-                  {formatDate(message.date)}
-                </Text>
-              </Flex>
-              {message.body ? (
-                <Box
-                  dangerouslySetInnerHTML={{ __html: message.body }}
-                  className="email-body"
-                  mt={2}
-                  mb={2}
-                />
-              ) : (
-                <Text mb={2}>{message.snippet}</Text>
-              )}
-            </Box>
-          ))}
+          {selectedThread.messages.map((message, index) => {
+            const cleanBody = getCleanHtmlBody(message.body); // Get cleaned body
+            return (
+              <Box
+                key={message.gmail_id}
+                p={4}
+                borderWidth="1px"
+                borderRadius="md"
+                bg={message.is_read ? "white" : "blue.50"}
+              >
+                <Flex justify="space-between" mb={2}>
+                  <Text fontWeight="bold">
+                    {formatSenderName(message.sender)}
+                  </Text>
+                  <Text fontSize="sm" color="gray.500">
+                    {formatDate(message.date)}
+                  </Text>
+                </Flex>
+                {cleanBody ? ( // Use cleaned body
+                  <Box
+                    dangerouslySetInnerHTML={{ __html: cleanBody }} // Render cleaned body
+                    className="email-body"
+                    mt={2}
+                    mb={2}
+                  />
+                ) : (
+                  <Text mb={2}>{message.snippet}</Text> // Fallback to snippet
+                )}
+              </Box>
+            );
+          })}
         </VStack>
       </Box>
     );
@@ -1683,6 +2073,8 @@ export default function Dashboard() {
       // Update the UI to reflect refreshed data
       setIsLoading(false);
 
+      // Commented out the success toast notification as requested
+      /*
       toast({
         title: `Email data refreshed`,
         description:
@@ -1691,6 +2083,7 @@ export default function Dashboard() {
         duration: 5000,
         isClosable: true,
       });
+      */
     } catch (error) {
       console.error("Error refreshing emails:", error);
       toast({
@@ -1747,6 +2140,21 @@ export default function Dashboard() {
 
         fetchLabeledEmails();
 
+        // Fetch background status after onboarding too
+        getBackgroundServiceStatus()
+          .then((statusResponse) => {
+            setIsAutoReplyEnabled(statusResponse.data.is_enabled);
+            setIsLoadingAutoReplyStatus(false);
+          })
+          .catch((statusError) => {
+            console.error(
+              "Error fetching background service status after onboarding:",
+              statusError
+            );
+            setIsLoadingAutoReplyStatus(false);
+            // Toast handled in main fetch logic
+          });
+
         toast({
           title: "Onboarding complete!",
           description:
@@ -1762,6 +2170,99 @@ export default function Dashboard() {
       });
   };
 
+  // Handler for toggling the auto-reply service
+  const handleToggleAutoReply = async () => {
+    if (isTogglingAutoReply) return; // Prevent concurrent requests
+
+    setIsTogglingAutoReply(true);
+    const currentState = isAutoReplyEnabled;
+
+    try {
+      console.log(`Toggling background service from ${currentState}...`);
+      const response = await toggleBackgroundService();
+
+      if (response.data.success) {
+        const newState = response.data.is_enabled;
+        setIsAutoReplyEnabled(newState);
+        console.log(`Background service toggled successfully to: ${newState}`);
+        toast({
+          title: `Background Auto-Reply ${newState ? "Enabled" : "Disabled"}`, // Adjusted title
+          description: response.data.message,
+          status: "success",
+          duration: 3000,
+          isClosable: true,
+        });
+      } else {
+        // Revert state on failure
+        setIsAutoReplyEnabled(currentState);
+        console.error(
+          "Failed to toggle background service:",
+          response.data.message
+        );
+
+        // Check if the failure requires authentication
+        if (response.data.needs_auth) {
+          toast({
+            title: "Authentication Required",
+            description:
+              "Please authorize the background service to access your email offline.",
+            status: "warning",
+            duration: 7000, // Longer duration
+            isClosable: true,
+            // Add an action button to trigger the auth flow
+            action: {
+              label: "Authorize Now",
+              onClick: initiateBackgroundAuth, // Call the new function
+            },
+          });
+        } else {
+          // Show generic error if auth is not the issue
+          toast({
+            title: "Error Toggling Service",
+            description:
+              response.data.message || "Could not update the service status.",
+            status: "error",
+            duration: 5000,
+            isClosable: true,
+          });
+        }
+      }
+    } catch (error: any) {
+      // Revert state on failure
+      setIsAutoReplyEnabled(currentState);
+      console.error("Error during background service toggle API call:", error);
+      toast({
+        title: "Error Toggling Service",
+        description:
+          error.response?.data?.message ||
+          "An unexpected error occurred. Please try again.",
+        status: "error",
+        duration: 5000,
+        isClosable: true,
+      });
+    } finally {
+      setIsTogglingAutoReply(false);
+    }
+  };
+
+  // Function to initiate background service OAuth flow
+  const initiateBackgroundAuth = async () => {
+    try {
+      const response = await getBackgroundServiceOAuthUrl();
+      window.location.href = response.data.auth_url;
+    } catch (error) {
+      console.error("Error getting background service auth URL:", error);
+      toast({
+        title: "Authorization Error",
+        description:
+          "Could not initiate authorization for the background service.",
+        status: "error",
+        duration: 5000,
+        isClosable: true,
+      });
+    }
+  };
+
   if (isLoading) {
     return (
       <Flex height="100vh" align="center" justify="center">
@@ -1771,242 +2272,189 @@ export default function Dashboard() {
   }
 
   return (
-    <Container maxW="container.xl" py={4}>
-      {/* Onboarding Modal */}
-      {showOnboardingModal && (
-        <OnboardingModal
-          isOpen={showOnboardingModal}
-          onClose={() => setShowOnboardingModal(false)}
-          onOnboardingComplete={handleOnboardingComplete}
-        />
-      )}
-
-      <Flex justify="space-between" align="center" mb={8}>
-        <Heading>Superconnector Email</Heading>
-        <HStack spacing={3}>
-          <Button
-            leftIcon={<FiSettings />}
-            colorScheme="teal"
-            variant="outline"
-            onClick={() => router.push("/settings/background-service")}
-          >
-            Settings
-          </Button>
-          <Button
-            leftIcon={<FiLogOut />}
-            colorScheme="red"
-            variant="outline"
-            onClick={handleLogout}
-          >
-            Logout
-          </Button>
-        </HStack>
-      </Flex>
-
-      {user && (
-        <Box mb={8}>
-          <Flex align="center" gap={4}>
-            {user.picture && (
-              <Box
-                borderRadius="full"
-                overflow="hidden"
-                width="50px"
-                height="50px"
-                backgroundImage={`url(${user.picture})`}
-                backgroundSize="cover"
-              />
-            )}
-            <Box>
-              <Heading size="md">{user.full_name}</Heading>
-              <Text color="gray.600">{user.email}</Text>
-            </Box>
-          </Flex>
-        </Box>
-      )}
-
-      <Flex pt={4} height="100vh" direction="column">
-        <Tabs
-          variant="enclosed"
-          colorScheme="blue"
-          mb={4}
-          index={tabIndex}
-          onChange={(index) => setTabIndex(index)}
+    <>
+      {isLoading ? (
+        <Flex justify="center" align="center" height="100vh">
+          <Spinner size="xl" />
+        </Flex>
+      ) : user ? (
+        <DashboardLayout
+          user={user}
+          onSyncEmails={syncEmails}
+          isSyncing={isSyncing}
+          notificationCount={0}
+          onLogout={handleLogout}
+          isAutoReplyEnabled={isAutoReplyEnabled}
+          isLoadingAutoReplyStatus={isLoadingAutoReplyStatus}
+          isTogglingAutoReply={isTogglingAutoReply}
+          onToggleAutoReply={handleToggleAutoReply}
+          activeTab={tabIndex}
+          onTabChange={setTabIndex}
+          tabCounts={{
+            inbox: emails.length,
+            "job postings": jobPostings.length,
+            candidates: candidates.length,
+            questions: questions.length,
+            "discussion topics": discussions.length,
+            events: events.length,
+            other: otherEmails.length,
+            irrelevant: irrelevantEmails.length,
+          }}
         >
-          <TabList>
-            <Tab>Inbox</Tab>
-            <Tab>Job Postings</Tab>
-            <Tab>Candidates</Tab>
-            <Tab>Questions</Tab>
-            <Tab>Follow-ups</Tab>
-            <Tab>Search</Tab>
-            <Tab>Other</Tab>
-            <Tab>Irrelevant</Tab>
-            <Tab>Prompts</Tab>
-          </TabList>
-          <TabPanels>
-            <TabPanel>
-              {/* Add visible refresh button at the top of each tab */}
-              <Box textAlign="right" mb={4}></Box>
-
-              {/* Add semantic search input */}
-              <Flex mb={4} align="center">
-                <InputGroup size="md" maxW="600px" mr={4}>
-                  <Input
-                    placeholder="Search email threads by concepts, topics, or meaning..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    onKeyPress={handleSearchKeyPress}
-                  />
-                  <InputRightElement width="4.5rem">
-                    <Button
-                      h="1.75rem"
-                      size="sm"
-                      onClick={handleSemanticSearch}
-                      isLoading={isSearching}
-                    >
-                      Search
-                    </Button>
-                  </InputRightElement>
-                </InputGroup>
-
-                <Button
-                  colorScheme="purple"
-                  onClick={startIndexingThreads}
-                  isLoading={isIndexing}
-                  loadingText="Indexing"
-                  ml="auto"
-                >
-                  Index Threads
-                </Button>
-              </Flex>
-
-              {/* Regular Inbox View */}
-              <Flex justify="space-between" align="center" mb={4}>
-                <Box
-                  p={5}
-                  shadow="md"
-                  borderWidth="1px"
-                  borderRadius="md"
-                  flex="1"
-                >
-                  <Heading fontSize="xl">Emails Overview</Heading>
-                  <Text mt={4}>
-                    You have {emails.length} recent emails in your inbox.
-                  </Text>
-                </Box>
-                <Flex ml={4}></Flex>
-              </Flex>
-
-              <Box
-                shadow="md"
-                borderWidth="1px"
-                borderRadius="md"
-                overflow="hidden"
-              >
-                <Table variant="simple">
-                  <Thead bg="gray.50">
-                    <Tr>
-                      <Th>From</Th>
-                      <Th>Subject (Thread)</Th>
-                      <Th>Date</Th>
-                      <Th>Labels</Th>
-                    </Tr>
-                  </Thead>
-                  <Tbody>
-                    {emails.length === 0 ? (
-                      <Tr>
-                        <Td colSpan={4} textAlign="center" py={4}>
-                          {isLoading ? (
-                            <Spinner size="sm" />
-                          ) : (
-                            "No emails found"
-                          )}
-                        </Td>
-                      </Tr>
-                    ) : (
-                      emails.map((email) => (
-                        <Tr
-                          key={email.gmail_id}
-                          onClick={() => fetchThread(email.thread_id)}
-                          cursor="pointer"
-                          _hover={{ bg: "gray.50" }}
-                          bg={email.is_read ? "white" : "blue.50"}
-                          title="Click to view complete thread"
-                        >
-                          <Td fontWeight={email.is_read ? "normal" : "bold"}>
-                            {email.sender.split("<")[0].trim()}
-                          </Td>
-                          <Td fontWeight={email.is_read ? "normal" : "bold"}>
-                            <Flex align="center">
-                              <Text>{email.subject || "(No Subject)"}</Text>
-                              {/* Small indicator that this is a thread */}
-                              <Badge
-                                ml={2}
-                                colorScheme="blue"
-                                variant="outline"
-                                fontSize="xs"
-                              >
-                                Thread
-                              </Badge>
-                            </Flex>
-                          </Td>
-                          <Td>{formatDate(email.date)}</Td>
-                          <Td>
-                            <Flex gap={1} wrap="wrap">
-                              {email.labels &&
-                                email.labels.slice(0, 2).map((label, idx) => (
-                                  <Badge
-                                    key={idx}
-                                    colorScheme={
-                                      label === "INBOX"
-                                        ? "blue"
-                                        : label === "IMPORTANT"
-                                        ? "red"
-                                        : label === "CATEGORY_PERSONAL"
-                                        ? "green"
-                                        : label === "CATEGORY_SOCIAL"
-                                        ? "purple"
-                                        : "gray"
-                                    }
-                                  >
-                                    {label.replace("CATEGORY_", "")}
-                                  </Badge>
-                                ))}
-                              {email.has_attachment && (
-                                <Badge colorScheme="teal">Attachment</Badge>
-                              )}
-                            </Flex>
-                          </Td>
+          <Box>
+            {tabIndex === 0 && (
+              <Box>
+                {selectedThread ? (
+                  renderThreadView()
+                ) : (
+                  <Box
+                    shadow="md"
+                    borderWidth="1px"
+                    borderRadius="md"
+                    overflow="hidden"
+                    width="100%"
+                    mx={0}
+                    px={0}
+                  >
+                    <Table variant="simple" width="100%" size="md">
+                      <Thead bg="gray.50">
+                        <Tr>
+                          <Th width="25%">From</Th>
+                          <Th width="45%">Subject (Thread)</Th>
+                          <Th width="15%">Date</Th>
+                          <Th width="15%">Labels</Th>
                         </Tr>
-                      ))
-                    )}
-                  </Tbody>
-                </Table>
+                      </Thead>
+                      <Tbody>
+                        {emails.length === 0 ? (
+                          <Tr>
+                            <Td colSpan={4} textAlign="center" py={4}>
+                              {isLoading ? (
+                                <Spinner size="sm" />
+                              ) : (
+                                "No emails found"
+                              )}
+                            </Td>
+                          </Tr>
+                        ) : (
+                          emails
+                            .filter(
+                              (email) => !/^(Re:\s*)/i.test(email.subject || "")
+                            ) // Filter out replies
+                            .map((email) => (
+                              <Tr
+                                key={email.gmail_id}
+                                onClick={() => fetchThread(email.thread_id)}
+                                cursor="pointer"
+                                _hover={{ bg: "gray.50" }}
+                                bg={email.is_read ? "white" : "blue.50"}
+                                title="Click to view complete thread"
+                              >
+                                <Td
+                                  fontWeight={email.is_read ? "normal" : "bold"}
+                                >
+                                  {formatSenderName(email.sender)}
+                                </Td>
+                                <Td
+                                  fontWeight={email.is_read ? "normal" : "bold"}
+                                >
+                                  <Flex align="center">
+                                    {/* Remove Re: prefix from subject */}
+                                    <Text>
+                                      {(
+                                        email.subject || "(No Subject)"
+                                      ).replace(/^(Re:\s*)/i, "")}{" "}
+                                    </Text>
+                                    <Badge
+                                      ml={2}
+                                      colorScheme="blue"
+                                      variant="outline"
+                                      fontSize="xs"
+                                    >
+                                      Thread
+                                    </Badge>
+                                  </Flex>
+                                </Td>
+                                <Td>{formatDate(email.date)}</Td>
+                                <Td>
+                                  <Flex gap={1} wrap="wrap">
+                                    {threadIdToCategoryMap.has(
+                                      email.thread_id
+                                    ) &&
+                                      (() => {
+                                        const label = threadIdToCategoryMap.get(
+                                          email.thread_id
+                                        )!;
+                                        return (
+                                          <Badge
+                                            key={`${email.thread_id}-category`}
+                                            colorScheme={
+                                              label === "Job Posting"
+                                                ? "blue"
+                                                : label === "Candidate"
+                                                ? "red"
+                                                : label === "Questions"
+                                                ? "green"
+                                                : label === "Discussion Topics"
+                                                ? "yellow"
+                                                : label === "Event"
+                                                ? "cyan"
+                                                : label === "Follow-ups"
+                                                ? "orange"
+                                                : label === "Search"
+                                                ? "purple"
+                                                : label === "Irrelevant"
+                                                ? "gray"
+                                                : "gray"
+                                            }
+                                          >
+                                            {label}
+                                          </Badge>
+                                        );
+                                      })()}
+                                    {email.has_attachment && (
+                                      <Badge colorScheme="teal">
+                                        Attachment
+                                      </Badge>
+                                    )}
+                                  </Flex>
+                                </Td>
+                              </Tr>
+                            ))
+                        )}
+                      </Tbody>
+                    </Table>
 
-                <Box p={2} textAlign="center" color="gray.500" fontSize="sm">
-                  <Text>
-                    Only showing original emails from each thread (not replies).
-                    Click a thread to view all replies.
-                  </Text>
-                </Box>
-
-                {hasMore && (
-                  <Flex justify="center" p={4}>
-                    <Button
-                      onClick={loadMoreEmails}
-                      isLoading={isLoading && page > 1}
-                      loadingText="Loading"
+                    <Box
+                      p={2}
+                      textAlign="center"
+                      color="gray.500"
+                      fontSize="sm"
                     >
-                      Load More
-                    </Button>
-                  </Flex>
+                      <Text>
+                        Only showing original emails from each thread (not
+                        replies). Click a thread to view all replies.
+                      </Text>
+                    </Box>
+
+                    {hasMore && (
+                      <Flex justify="center" p={4}>
+                        <Button
+                          onClick={loadMoreEmails}
+                          isLoading={isLoading && page > 1}
+                          loadingText="Loading"
+                        >
+                          Load More
+                        </Button>
+                      </Flex>
+                    )}
+                  </Box>
                 )}
               </Box>
-            </TabPanel>
+            )}
 
-            {/* Job Postings Tab */}
-            <TabPanel>
-              {selectedLabeledEmail &&
+            {tabIndex === 1 &&
+              (selectedLabeledEmail &&
               selectedLabeledEmail.category === "Job Posting" ? (
                 renderLabeledEmailView()
               ) : (
@@ -2016,12 +2464,10 @@ export default function Dashboard() {
                   </Flex>
                   {renderLabeledEmailList(jobPostings, "Job Posting")}
                 </Box>
-              )}
-            </TabPanel>
+              ))}
 
-            {/* Candidates Tab */}
-            <TabPanel>
-              {selectedLabeledEmail &&
+            {tabIndex === 2 &&
+              (selectedLabeledEmail &&
               selectedLabeledEmail.category === "Candidate" ? (
                 renderLabeledEmailView()
               ) : (
@@ -2031,12 +2477,10 @@ export default function Dashboard() {
                   </Flex>
                   {renderLabeledEmailList(candidates, "Candidate")}
                 </Box>
-              )}
-            </TabPanel>
+              ))}
 
-            {/* Questions Tab */}
-            <TabPanel>
-              {selectedLabeledEmail &&
+            {tabIndex === 3 &&
+              (selectedLabeledEmail &&
               selectedLabeledEmail.category === "Question" ? (
                 renderLabeledEmailView()
               ) : (
@@ -2046,12 +2490,10 @@ export default function Dashboard() {
                   </Flex>
                   {renderLabeledEmailList(questions, "Question")}
                 </Box>
-              )}
-            </TabPanel>
+              ))}
 
-            {/* Discussion Topics Tab */}
-            <TabPanel>
-              {selectedLabeledEmail &&
+            {tabIndex === 4 &&
+              (selectedLabeledEmail &&
               selectedLabeledEmail.category === "Discussion" ? (
                 renderLabeledEmailView()
               ) : (
@@ -2061,12 +2503,10 @@ export default function Dashboard() {
                   </Flex>
                   {renderLabeledEmailList(discussions, "Discussion")}
                 </Box>
-              )}
-            </TabPanel>
+              ))}
 
-            {/* Events Tab */}
-            <TabPanel>
-              {selectedLabeledEmail &&
+            {tabIndex === 5 &&
+              (selectedLabeledEmail &&
               selectedLabeledEmail.category === "Event" ? (
                 renderLabeledEmailView()
               ) : (
@@ -2076,12 +2516,10 @@ export default function Dashboard() {
                   </Flex>
                   {renderLabeledEmailList(events, "Event")}
                 </Box>
-              )}
-            </TabPanel>
+              ))}
 
-            {/* Other Tab */}
-            <TabPanel>
-              {selectedLabeledEmail &&
+            {tabIndex === 6 &&
+              (selectedLabeledEmail &&
               selectedLabeledEmail.category === "Other" ? (
                 renderLabeledEmailView()
               ) : (
@@ -2091,12 +2529,10 @@ export default function Dashboard() {
                   </Flex>
                   {renderLabeledEmailList(otherEmails, "Other")}
                 </Box>
-              )}
-            </TabPanel>
+              ))}
 
-            {/* Irrelevant Tab */}
-            <TabPanel>
-              {selectedLabeledEmail &&
+            {tabIndex === 7 &&
+              (selectedLabeledEmail &&
               selectedLabeledEmail.category === "Irrelevant" ? (
                 renderLabeledEmailView()
               ) : (
@@ -2108,26 +2544,34 @@ export default function Dashboard() {
                   </Flex>
                   {renderLabeledEmailList(irrelevantEmails, "Irrelevant")}
                 </Box>
-              )}
-            </TabPanel>
+              ))}
 
-            {/* Prompts Management Tab */}
-            <TabPanel p={0}>
-              <PromptManagement />
-            </TabPanel>
-          </TabPanels>
-        </Tabs>
+            {tabIndex === 8 && <PromptManagement />}
 
-        {/* Content area - only display thread if not already showing in a tab */}
-        {selectedThread &&
-        !selectedLabeledEmail &&
-        !(tabIndex === 1 && selectedThread.labels?.includes("Job Posting")) &&
-        !(tabIndex === 2 && selectedThread.labels?.includes("Candidate")) &&
-        !(tabIndex === 3 && selectedThread.labels?.includes("Questions")) &&
-        !(tabIndex === 4 && selectedThread.labels?.includes("Follow-up"))
-          ? renderThreadView()
-          : null}
-      </Flex>
+            {/* Remove the redundant thread rendering since each tab now handles its own threads */}
+          </Box>
+        </DashboardLayout>
+      ) : (
+        <Flex justify="center" align="center" height="100vh">
+          <Box textAlign="center">
+            <Text>Session expired. Please log in again.</Text>
+            <Button colorScheme="blue" mt={4} onClick={() => router.push("/")}>
+              Go to Login
+            </Button>
+          </Box>
+        </Flex>
+      )}
+
+      {/* Onboarding Modal - Conditionally render based on state */}
+      <OnboardingModal
+        isOpen={showOnboardingModal}
+        onClose={() => {
+          setShowOnboardingModal(false);
+          // Refetch user data to get updated is_onboarded status
+          getCurrentUser().then((res) => setUser(res.data));
+        }}
+        userId={user?.id}
+      />
 
       {/* Indexing Progress Modal */}
       <Modal isOpen={isOpen} onClose={onClose}>
@@ -2199,6 +2643,6 @@ export default function Dashboard() {
           />
         </Tooltip>
       </Box>
-    </Container>
+    </>
   );
 }

@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional
 import logging
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import or_
+from sqlalchemy import or_, text
 
 from app.db.database import get_db
 from app.models.user import User
@@ -25,12 +25,14 @@ router = APIRouter(prefix="/emails", tags=["Emails"])
 
 @router.get("/", response_model=List[dict])
 async def list_messages(
-    q: Optional[str] = None,
-    label_ids: Optional[str] = None,
-    page: int = 1,
-    page_size: int = 20,
-    include_full_content: bool = False,
-    refresh_db: bool = False,
+    q: Optional[str] = Query(None),
+    label_ids: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    include_full_content: bool = Query(False),
+    refresh_db: bool = Query(False),
+    group_threads: bool = Query(False),
+    include_latest_per_thread: bool = Query(False),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -43,9 +45,11 @@ async def list_messages(
     - page_size: Number of results per page
     - include_full_content: Whether to include full email content
     - refresh_db: If true, only fetch data from database (no Gmail API calls)
+    - group_threads: If true, group results by thread_id
+    - include_latest_per_thread: If true (and group_threads is true), return only the latest message per thread
     """
     print(
-        f"List messages request: q={q}, label_ids={label_ids}, page={page}, page_size={page_size}, refresh_db={refresh_db}"
+        f"List messages request: q={q}, label_ids={label_ids}, page={page}, page_size={page_size}, refresh_db={refresh_db}, group_threads={group_threads}, latest_per_thread={include_latest_per_thread}"
     )
 
     # Return empty list for users who haven't completed onboarding
@@ -61,7 +65,7 @@ async def list_messages(
         if label_ids:
             label_list = label_ids.split(",")
 
-        # Call the email service to list messages
+        # Call the email service to list messages, passing the new parameters
         emails = email_service["list_messages"](
             user=user,
             db=db,
@@ -70,6 +74,8 @@ async def list_messages(
             label_ids=label_list,
             page=page,
             refresh_db=refresh_db,
+            group_threads=group_threads,
+            include_latest_per_thread=include_latest_per_thread,
         )
 
         # If full content is specifically requested, ensure it's included

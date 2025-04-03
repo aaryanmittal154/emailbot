@@ -427,7 +427,7 @@ async def refresh_access_token(data: RefreshRequest, db: Session = Depends(get_d
     try:
         return auth_service.refresh_token(data.refresh_token, db)
     except ValueError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/logout")
@@ -436,23 +436,6 @@ async def logout(
     db: Session = Depends(get_db),
     current_user: User = Depends(auth_service.get_current_user),
 ):
-    """
-    Logout endpoint - invalidates tokens without affecting background service status
-    """
-    try:
-        # Clear the user's refresh token in the database
-        auth_service.invalidate_refresh_token(current_user.id, db)
-
-        return {"status": "success", "message": "Logged out successfully"}
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Logout failed: {str(e)}",
-        )
-
-
-@router.get("/me", response_model=Dict[str, Any])
-async def get_current_user_info(
-    current_user: User = Depends(auth_service.get_current_user),
-):
-    """Get current user information"""
+    # For now, logout is client-side (removing token).
+    # Optionally, add server-side token invalidation here if needed.
+    return {"message": "Logout successful"}

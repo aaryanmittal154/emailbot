@@ -3,9 +3,12 @@ import axios from "axios";
 // API endpoint base URL
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+console.log(`Using API URL: ${BASE_URL}`);
+
 // Set up axios instance
 const api = axios.create({
   baseURL: BASE_URL,
+  timeout: 10000, // Add timeout to prevent hanging requests
 });
 
 // Add token to requests if available
@@ -17,9 +20,34 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Add response interceptor for better error handling
+api.interceptors.response.use(
+  (response) => {
+    return response;
+  },
+  (error) => {
+    console.error("API Error Details:", {
+      message: error.message,
+      url: error.config?.url,
+      method: error.config?.method,
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      headers: error.config?.headers,
+    });
+    return Promise.reject(error);
+  }
+);
+
 // Email-related API calls
 export const getEmails = async (params = {}) => {
-  return api.get("/api/emails", { params });
+  console.log("Fetching emails with params:", params);
+  try {
+    return await api.get("/api/emails", { params });
+  } catch (error) {
+    console.error("getEmails error:", error);
+    throw error;
+  }
 };
 
 export const getThread = async (threadId) => {

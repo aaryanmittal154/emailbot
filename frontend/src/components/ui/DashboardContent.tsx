@@ -170,7 +170,10 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
         t: timestamp,
       });
 
-      const newEmails = response.data.emails || [];
+      // Handle both array responses and object responses with emails property
+      const newEmails = Array.isArray(response.data) ? response.data : response.data?.emails || [];
+      console.log(`Fetched ${newEmails.length} emails for page ${page}`);
+
       if (page === 1) {
         setEmails(newEmails);
       } else {
