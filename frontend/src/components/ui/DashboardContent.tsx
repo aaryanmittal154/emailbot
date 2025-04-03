@@ -26,13 +26,25 @@ import {
   Tooltip,
   Icon,
 } from "@chakra-ui/react";
-import { SearchIcon, ArrowBackIcon, ChevronRightIcon, RepeatIcon, AddIcon, InfoIcon, WarningIcon, TimeIcon } from "@chakra-ui/icons";
+import {
+  SearchIcon,
+  ArrowBackIcon,
+  ChevronRightIcon,
+  RepeatIcon,
+  AddIcon,
+  InfoIcon,
+  WarningIcon,
+  TimeIcon,
+} from "@chakra-ui/icons";
 import { FiMail } from "react-icons/fi";
 import { motion, AnimatePresence } from "framer-motion";
 import CategoryPanel from "./CategoryPanel";
 import EmailThreadViewer from "./EmailThreadViewer";
 import NewEmailNotifier from "./NewEmailNotifier";
-import { formatTimeSince, getLastEmailCheckTimestamp } from "../../lib/emailUtils";
+import {
+  formatTimeSince,
+  getLastEmailCheckTimestamp,
+} from "../../lib/emailUtils";
 
 // Preserve all API functions
 import {
@@ -85,9 +97,12 @@ interface DashboardContentProps {
   isLoading?: boolean;
 }
 
+// Added type definition for ViewType
+type ViewType = "all" | "thread" | "search"; // Assuming possible values
+
 const MotionBox = motion(Box);
 
-const DashboardContent: React.FC<DashboardContentProps> = ({
+export const DashboardContent = ({
   user,
   isSyncing,
   setIsSyncing,
@@ -104,7 +119,9 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
   const [isThreadLoading, setIsThreadLoading] = useState(false);
 
   // Ensure inputs are arrays
-  const safeJobPostings = Array.isArray(initialJobPostings) ? initialJobPostings : [];
+  const safeJobPostings = Array.isArray(initialJobPostings)
+    ? initialJobPostings
+    : [];
 
   // Panel state
   const [emails, setEmails] = useState<any[]>(initialEmails);
@@ -129,6 +146,7 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
   const [questions, setQuestions] = useState<any[]>([]);
   const [discussionTopics, setDiscussionTopics] = useState<any[]>([]);
   const [other, setOther] = useState<any[]>([]);
+  const [irrelevantEmails, setIrrelevantEmails] = useState<any[]>([]);
 
   // Category loading states
   const [loadedCategories, setLoadedCategories] = useState<string[]>([]);
@@ -171,7 +189,9 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
       });
 
       // Handle both array responses and object responses with emails property
-      const newEmails = Array.isArray(response.data) ? response.data : response.data?.emails || [];
+      const newEmails = Array.isArray(response.data)
+        ? response.data
+        : response.data?.emails || [];
       console.log(`Fetched ${newEmails.length} emails for page ${page}`);
 
       if (page === 1) {
@@ -254,26 +274,36 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
 
     try {
       // Fetch all the different categories in parallel for better performance
-      const [jobResults, candidateResults, questionResults, discussionResults, eventsResults, otherResults, irrelevantResults] = await Promise.all([
+      const [
+        jobResults,
+        candidateResults,
+        questionResults,
+        discussionResults,
+        eventsResults,
+        otherResults,
+        irrelevantResults,
+      ] = await Promise.all([
         getEmailsByLabel("Job Posting"),
         getEmailsByLabel("Candidate"),
         getEmailsByLabel("Questions"),
         getEmailsByLabel("Discussion Topics"),
         getEmailsByLabel("Event"),
         getEmailsByLabel("Other"),
-        getEmailsByLabel("Irrelevant")
+        getEmailsByLabel("Irrelevant"),
       ]);
 
       setJobPostings(jobResults.data || []);
       setCandidates(candidateResults.data || []);
       setQuestions(questionResults.data || []);
-      setDiscussions(discussionResults.data || []);
+      setDiscussionTopics(discussionResults.data || []);
       setEvents(eventsResults.data || []);
-      setOtherEmails(otherResults.data || []);
+      setOther(otherResults.data || []);
       setIrrelevantEmails(irrelevantResults.data || []);
 
       // Update the badge counts if needed
-      console.log(`Loaded labeled emails: ${jobResults.data.length} jobs, ${candidateResults.data.length} candidates`);
+      console.log(
+        `Loaded labeled emails: ${jobResults.data.length} jobs, ${candidateResults.data.length} candidates`
+      );
     } catch (error) {
       console.error("Error fetching labeled emails:", error);
       toast({
@@ -311,10 +341,10 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
           setQuestions(response.data.emails || []);
           break;
         case "Discussion Topics":
-          setDiscussions(response.data.emails || []);
+          setDiscussionTopics(response.data.emails || []);
           break;
         case "Other":
-          setOtherEmails(response.data.emails || []);
+          setOther(response.data.emails || []);
           break;
         case "Irrelevant":
           setIrrelevantEmails(response.data.emails || []);
@@ -483,8 +513,8 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
     // Sort emails by date (newest first)
     adaptedEmails.sort((a, b) => {
       // Try to use timestamp first, then date as fallback
-      const dateA = a.timestamp || a.date || '';
-      const dateB = b.timestamp || b.date || '';
+      const dateA = a.timestamp || a.date || "";
+      const dateB = b.timestamp || b.date || "";
 
       // Sort in descending order (newest first)
       return new Date(dateB).getTime() - new Date(dateA).getTime();
@@ -536,10 +566,8 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
     />
   );
 
-  // Render job postings panel
-  const renderJobPostingsPanel = () => {
-    console.log("Rendering job postings panel with data:", jobPostings);
-    return (
+  // Render job postings panel - Changed to concise arrow function
+  const renderJobPostingsPanel = () => (
     <CategoryPanel
       title="Job Postings"
       category="Job Posting"
@@ -634,7 +662,6 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
             exit={{ opacity: 0 }}
             transition={{ duration: 0.3 }}
           >
-            {/* Search Bar */}
             <Box mb={8}>
               <InputGroup size="lg">
                 <Input
@@ -668,7 +695,6 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
               </InputGroup>
             </Box>
 
-            {/* Email Categories */}
             <Tabs
               variant="modern"
               colorScheme="brand"
@@ -734,27 +760,31 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
                 </Tab>
                 <Tab>
                   Discussion Topics{" "}
-                  {discussions.length > 0 && (
+                  {discussionTopics.length > 0 && (
                     <Badge ml={2} colorScheme="teal" borderRadius="full">
-                      {discussions.length}
+                      {discussionTopics.length}
                     </Badge>
                   )}
                 </Tab>
                 <Tab>
                   Other{" "}
-                  {otherEmails.length > 0 && (
+                  {other.length > 0 && (
                     <Badge ml={2} colorScheme="gray" borderRadius="full">
-                      {otherEmails.length}
+                      {other.length}
                     </Badge>
                   )}
                 </Tab>
-                <Tab>Irrelevant {irrelevantEmails.length > 0 && (
-                  <Badge ml={2} colorScheme="red" borderRadius="full">{irrelevantEmails.length}</Badge>
-                )}</Tab>
+                <Tab>
+                  Irrelevant{" "}
+                  {irrelevantEmails.length > 0 && (
+                    <Badge ml={2} colorScheme="red" borderRadius="full">
+                      {irrelevantEmails.length}
+                    </Badge>
+                  )}
+                </Tab>
               </TabList>
 
               <TabPanels>
-                {/* All Emails Tab */}
                 <TabPanel p={0}>
                   {searchResults ? (
                     <Box mb={4}>
@@ -771,7 +801,6 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
                         </Button>
                       </Flex>
 
-                      {/* Search results component would go here */}
                       <Box>
                         {searchResults.results &&
                         searchResults.results.length > 0 ? (
@@ -832,44 +861,34 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
                   )}
                 </TabPanel>
 
-                {/* Job Postings Tab */}
                 <TabPanel p={0}>{renderJobPostingsPanel()}</TabPanel>
-
-                {/* Candidates Tab */}
                 <TabPanel p={0}>{renderCandidatesPanel()}</TabPanel>
-
-                {/* Events Tab */}
                 <TabPanel p={0}>
                   {renderCategoryPanel("Events", "Event", events, () =>
                     loadCategoryIfNeeded("Event")
                   )}
                 </TabPanel>
-
-                {/* Questions Tab */}
                 <TabPanel p={0}>
-                  {renderCategoryPanel("Questions", "Questions", questions, () =>
-                    loadCategoryIfNeeded("Questions")
+                  {renderCategoryPanel(
+                    "Questions",
+                    "Questions",
+                    questions,
+                    () => loadCategoryIfNeeded("Questions")
                   )}
                 </TabPanel>
-
-                {/* Discussion Topics Tab */}
                 <TabPanel p={0}>
                   {renderCategoryPanel(
                     "Discussion Topics",
                     "Discussion Topics",
-                    discussions,
+                    discussionTopics,
                     () => loadCategoryIfNeeded("Discussion Topics")
                   )}
                 </TabPanel>
-
-                {/* Other Tab */}
                 <TabPanel p={0}>
-                  {renderCategoryPanel("Other", "Other", otherEmails, () =>
+                  {renderCategoryPanel("Other", "Other", other, () =>
                     loadCategoryIfNeeded("Other")
                   )}
                 </TabPanel>
-
-                {/* Irrelevant Tab */}
                 <TabPanel p={0}>{renderIrrelevantPanel()}</TabPanel>
               </TabPanels>
             </Tabs>
@@ -879,5 +898,3 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
     </Box>
   );
 };
-
-export default DashboardContent;

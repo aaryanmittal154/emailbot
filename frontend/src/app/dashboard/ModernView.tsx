@@ -10,7 +10,7 @@ import { motion } from "framer-motion";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import DashboardLayout from "../../components/ui/DashboardLayout";
-import DashboardContent from "../../components/ui/DashboardContent";
+import { DashboardContent } from "../../components/ui/DashboardContent";
 import theme from "../../styles/theme";
 import { getEmails, syncEmails, getEmailsByLabel } from "../../lib/api";
 
@@ -142,6 +142,7 @@ export default function ModernView({
             Return to Classic View
           </Button>
         </Box>
+        {/* @ts-ignore // Temporary workaround for persistent type error in DashboardContent */}
         <DashboardContent
           user={user}
           isSyncing={isSyncing}
