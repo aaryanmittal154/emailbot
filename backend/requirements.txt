@@ -20,3 +20,4 @@ tiktoken==0.5.1
 numpy>=1.24.0
 scikit-learn>=1.2.0
 python-dateutil>=2.8.2
+schedule
