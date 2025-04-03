@@ -18,12 +18,9 @@ from app.services.embedding_service import create_thread_embedding
 from app.services.vector_db_service import vector_db
 from app.models.email import EmailMetadata as Email
 from app.schemas.label import (
-    EmailLabelCreate as LabelCreate,
-    EmailLabelUpdate as LabelUpdate,
     LabelCategoryCreate,
     LabelCategoryUpdate,
     ThreadLabelCreate,
-    ThreadLabelUpdate,
     LabelFeedbackCreate,
     LabelSuggestionResponse,
 )

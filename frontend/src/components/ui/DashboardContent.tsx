@@ -137,27 +137,6 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
   // UI state
   const columns = useBreakpointValue({ base: 1, md: 2, lg: 3 });
 
-  // Add state to track emails that arrived during the current session
-  const [newlyArrivedEmails, setNewlyArrivedEmails] = useState<any[]>([]);
-
-  // Add state for tracking last email check
-  const [lastEmailCheck, setLastEmailCheck] = useState<string | null>(
-    typeof window !== 'undefined' ? getLastEmailCheckTimestamp() : null
-  );
-
-  // Add state for test button loading
-  const [isTestingEmailFetch, setIsTestingEmailFetch] = useState(false);
-
-  // State for various email categories
-  const [emails, setEmails] = useState<any[]>(initialEmails);
-  const [jobPostings, setJobPostings] = useState<any[]>(safeJobPostings);
-  const [candidates, setCandidates] = useState<any[]>(initialCandidates);
-  const [questions, setQuestions] = useState<any[]>([]);
-  const [discussions, setDiscussions] = useState<any[]>([]);
-  const [events, setEvents] = useState<any[]>([]);
-  const [otherEmails, setOtherEmails] = useState<any[]>([]);
-  const [irrelevantEmails, setIrrelevantEmails] = useState<any[]>([]);
-
   // Update state when props change
   useEffect(() => {
     if (initialEmails.length > 0) setEmails(initialEmails);
@@ -415,47 +394,12 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
     }
   }, [user]);
 
-  // Add automatic refresh for emails - preserved functionality
-  useEffect(() => {
-    if (!user) return;
-
-    const refreshInterval = setInterval(() => {
-      console.log("Auto-refreshing emails...");
-      fetchEmails(1);
-
-      // Only refresh loaded categories
-      loadedCategories.forEach((category) => {
-        handleRefreshCategory(category);
-      });
-    }, 5 * 60 * 1000); // Every 5 minutes
-
-    return () => clearInterval(refreshInterval);
-  }, [user, loadedCategories]);
-
   // On-demand category loading
   const loadCategoryIfNeeded = (category: string) => {
     if (!loadedCategories.includes(category)) {
       handleRefreshCategory(category);
     }
   };
-
-  // Update last checked timestamp from localStorage
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const checkTimestamp = () => {
-        const timestamp = getLastEmailCheckTimestamp();
-        setLastEmailCheck(timestamp);
-      };
-
-      // Check initially
-      checkTimestamp();
-
-      // Set up interval to update the displayed time
-      const intervalId = setInterval(checkTimestamp, 10000); // Update every 10 seconds
-
-      return () => clearInterval(intervalId);
-    }
-  }, []);
 
   // ===== HANDLERS =====
 
@@ -474,88 +418,6 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
     if (selectedThread) {
       fetchThread(selectedThread.thread_id);
     }
-  };
-
-  // Handle when new emails are received from the notifier
-  const handleNewEmailsReceived = (newEmails: any[]) => {
-    setNewlyArrivedEmails(prevEmails => {
-      // Combine with any previously received new emails, avoiding duplicates
-      const emailIds = new Set(prevEmails.map(e => e.id));
-      const uniqueNewEmails = newEmails.filter(e => !emailIds.has(e.id));
-      return [...prevEmails, ...uniqueNewEmails];
-    });
-
-    // Update the main emails list if we're in the "all" view
-    if (viewType === "all") {
-      setEmails(prevEmails => {
-        // Add the new emails to the beginning of the list
-        const emailIds = new Set(prevEmails.map(e => e.id));
-        const uniqueNewEmails = newEmails.filter(e => !emailIds.has(e.id));
-        return [...uniqueNewEmails, ...prevEmails];
-      });
-    }
-
-    // Update the appropriate category if we have new emails that belong to any categories
-    const jobPostingsEmails = newEmails.filter(email =>
-      email.labels && email.labels.includes("Job Posting"));
-    const candidateEmails = newEmails.filter(email =>
-      email.labels && email.labels.includes("Candidate"));
-
-    if (jobPostingsEmails.length > 0) {
-      setJobPostings(prev => [...jobPostingsEmails, ...prev]);
-    }
-
-    if (candidateEmails.length > 0) {
-      setCandidates(prev => [...candidateEmails, ...prev]);
-    }
-  };
-
-  // Add a test function for checking new emails manually
-  const handleTestEmailFetch = () => {
-    setIsTestingEmailFetch(true);
-    toast({
-      title: "Testing Email Fetch",
-      description: "Manually checking for new emails...",
-      status: "info",
-      duration: 3000,
-      isClosable: true,
-    });
-
-    // Use our API directly to check for new emails
-    getNewEmails()
-      .then(response => {
-        const { count, emails, timestamp } = response.data;
-        // Update last check timestamp
-        setLastEmailCheck(timestamp);
-
-        toast({
-          title: `Found ${count} new email${count === 1 ? '' : 's'}`,
-          description: count > 0
-            ? "New emails have been added to your categories"
-            : "No new emails found since last check",
-          status: count > 0 ? "success" : "info",
-          duration: 5000,
-          isClosable: true,
-        });
-
-        // Update UI with any new emails found
-        if (count > 0 && emails && emails.length > 0) {
-          handleNewEmailsReceived(emails);
-        }
-      })
-      .catch(error => {
-        console.error("Test fetch failed:", error);
-        toast({
-          title: "Error checking for emails",
-          description: "Something went wrong. Please try again.",
-          status: "error",
-          duration: 3000,
-          isClosable: true,
-        });
-      })
-      .finally(() => {
-        setIsTestingEmailFetch(false);
-      });
   };
 
   // ===== RENDER FUNCTIONS =====
@@ -746,55 +608,6 @@ const DashboardContent: React.FC<DashboardContentProps> = ({
 
   return (
     <Box position="relative">
-      {/* Add the NewEmailNotifier at the top */}
-      <NewEmailNotifier
-        onNewEmailsReceived={handleNewEmailsReceived}
-        pollingInterval={30000} // Check for new emails every 30 seconds
-      />
-
-      {/* Test Button for New Email Fetch - positioned more prominently */}
-      <Flex justifyContent="flex-end" mb={4} alignItems="center">
-        {lastEmailCheck && (
-          <Flex alignItems="center" mr={4} color="gray.600" fontSize="sm">
-            <TimeIcon mr={1} />
-            <Text>Last checked: {formatTimeSince(lastEmailCheck)}</Text>
-          </Flex>
-        )}
-        <Button
-          leftIcon={<RepeatIcon />}
-          colorScheme="blue"
-          size="md"
-          isLoading={isTestingEmailFetch}
-          loadingText="Checking..."
-          onClick={handleTestEmailFetch}
-        >
-          Test New Email Fetch
-        </Button>
-      </Flex>
-
-      {/* Floating action button for manually triggering email fetch */}
-      <Box
-        position="fixed"
-        bottom="80px"
-        right="20px"
-        zIndex={10}
-      >
-        <Tooltip label="Check for new emails now">
-          <IconButton
-            aria-label="Check for new emails"
-            icon={<Icon as={FiMail} />}
-            colorScheme="green"
-            size="lg"
-            isRound
-            boxShadow="lg"
-            isLoading={isTestingEmailFetch}
-            onClick={handleTestEmailFetch}
-            _hover={{ transform: 'scale(1.1)' }}
-            transition="all 0.2s"
-          />
-        </Tooltip>
-      </Box>
-
       <AnimatePresence mode="wait">
         {selectedThread ? (
           <MotionBox

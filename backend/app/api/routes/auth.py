@@ -27,7 +27,6 @@ from app.models.token import Token as TokenModel
 from app.schemas.token import TokenResponse, GoogleAuthResponse
 from app.services import auth_service
 from app.services.email_service import email_service
-from fastapi.security import OAuth2PasswordRequestForm
 from jose import jwt, JWTError
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])

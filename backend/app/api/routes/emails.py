@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
-from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional
 import logging
@@ -12,7 +11,6 @@ from app.models.email import EmailMetadata
 from app.models.email_label import ThreadLabel
 from app.schemas.email import (
     EmailResponse,
-    ThreadResponse,
     SendEmailRequest,
     SendEmailResponse,
 )

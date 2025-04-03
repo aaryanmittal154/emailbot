@@ -19,9 +19,6 @@ vector_db_service = VectorDBService()
 
 @router.get("/analytics/summary")
 async def get_email_summary(
-    max_count: int = Query(
-        50, description="Maximum number of emails to include in analytics"
-    ),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):

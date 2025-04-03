@@ -1,6 +1,5 @@
 import os
 from typing import List, Dict, Any, Optional
-import pinecone
 from pinecone import Pinecone, ServerlessSpec
 import time
 import json

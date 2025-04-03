@@ -34,32 +34,6 @@ export const searchEmails = async (query) => {
   return api.post("/api/emails/semantic-search", { query });
 };
 
-/**
- * Enhanced semantic search that can search across multiple categories
- * This preserves all existing functionality while adding cross-category support
- * @param query The search query text
- * @param includeCategories Array of category labels to include in search (empty means all)
- * @param excludeCategories Array of category labels to exclude from search
- * @param topK Number of results to return
- * @param timestamp Optional timestamp for cache-busting
- * @returns Promise with search results from multiple categories
- */
-export const semanticSearchMultiCategory = async (
-  query: string,
-  includeCategories: string[] = [],
-  excludeCategories: string[] = [],
-  topK: number = 10,
-  timestamp?: number
-) => {
-  return api.post("/api/emails/semantic-search-multi", {
-    query,
-    include_categories: includeCategories,
-    exclude_categories: excludeCategories,
-    top_k: topK,
-    t: timestamp || Date.now(), // Add timestamp for cache-busting
-  });
-};
-
 export const indexEmails = async (maxThreads = 100) => {
   return api.post("/api/emails/semantic-index", { max_threads: maxThreads });
 };
@@ -72,16 +46,8 @@ export const triggerAutoReply = async (maxResults = 20, useHtml = false) => {
   });
 };
 
-export const setupPushNotifications = async () => {
-  return api.post("/api/auto-reply/setup-push-notifications");
-};
-
 export const getAutoReplyConfig = async () => {
   return api.get("/api/auto-reply/config");
-};
-
-export const updateAutoReplyConfig = async (config) => {
-  return api.post("/api/auto-reply/config", config);
 };
 
 export const getAutoReplyStatus = async () => {
@@ -134,22 +100,6 @@ export const disableGmailVacationResponder = async () => {
  */
 export const resetGmailRateLimits = async () => {
   return api.post("/api/auto-reply/reset-rate-limits");
-};
-
-export const updateGmailVacationSettings = async (
-  enabled,
-  subject,
-  message,
-  startTime,
-  endTime
-) => {
-  return api.post("/api/auto-reply/vacation-settings", {
-    enabled,
-    subject,
-    message,
-    start_time: startTime,
-    end_time: endTime,
-  });
 };
 
 // Label-related API calls
@@ -392,31 +342,18 @@ export const getMatchingJobs = async (
   candidateThreadId: string,
   topK: number = 3
 ) => {
-  return api.get(`/api/matches/candidate/${candidateThreadId}/jobs`, {
+  console.log(
+    `API Call: getMatchingJobs for candidate thread ${candidateThreadId}`
+  );
+  return api.get(`/api/matches/jobs/${candidateThreadId}`, {
     params: { top_k: topK },
-  });
-};
-
-/**
- * Get previous matches for a thread
- * @param threadId The thread ID
- * @param matchType Either 'job_to_candidate' or 'candidate_to_job'
- * @param limit Maximum number of matches to return
- * @returns Promise with match history
- */
-export const getMatchHistory = async (
-  threadId: string,
-  matchType: string,
-  limit: number = 10
-) => {
-  return api.get(`/api/matches/history/${threadId}`, {
-    params: { match_type: matchType, limit },
   });
 };
 
 // User-related API calls
 export const getCurrentUser = async () => {
   console.log("Calling getCurrentUser API");
+  const token = localStorage.getItem("auth_token");
   return api.get("/api/auth/me");
 };
 
@@ -426,28 +363,6 @@ export const setOnboardingPreferences = (preferences: {
 }) => {
   console.log("Calling onboarding API with preferences:", preferences);
   return api.post("/api/auth/onboarding", preferences);
-};
-
-// Update email access preferences after onboarding
-export const updateEmailPreferences = (preferences: {
-  max_emails_to_index: number;
-}) => {
-  return api.post("/api/auth/update-email-preferences", preferences);
-};
-
-export const setupRealtimeNotifications = async () => {
-  return api.post("/api/auto-reply/setup-realtime-notifications");
-};
-
-/**
- * Get the URL for Google login with offline access
- * @param redirectUri Where to redirect after successful authentication
- * @returns Google auth URL with proper scopes for offline access
- */
-export const getOfflineAccessUrl = (redirectUri: string = "/dashboard") => {
-  return `/api/auth/login?offline_access=true&redirect_uri=${encodeURIComponent(
-    redirectUri
-  )}`;
 };
 
 /**
@@ -549,38 +464,5 @@ export const refreshEmailsFromDatabase = async (maxResults: number = 20) => {
     throw error;
   }
 };
-
-// Function to get emails with pagination
-export async function fetchEmailsWithParams({
-  page = 1,
-  pageSize = 20,
-  q,
-  labelIds,
-  refreshDb = false,
-}) {
-  const params = new URLSearchParams({
-    page: page.toString(),
-    page_size: pageSize.toString(),
-  });
-
-  if (q) params.append("q", q);
-  if (labelIds) params.append("label_ids", labelIds);
-  if (refreshDb) params.append("refresh_db", "true");
-
-  const response = await api.get(`/emails?${params.toString()}`);
-  return response;
-}
-
-// Function to get emails for onboarding selection
-export async function getEmailsForOnboarding({ page = 1, pageSize = 20 }) {
-  const params = new URLSearchParams({
-    page: page.toString(),
-    page_size: pageSize.toString(),
-    include_full_content: "true",
-  });
-
-  const response = await api.get(`/emails?${params.toString()}`);
-  return response;
-}
 
 export default api;

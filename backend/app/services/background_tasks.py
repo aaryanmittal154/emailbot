@@ -233,7 +233,7 @@ def stop_background_tasks():
     logger.info("Stopping background tasks")
 
 
-async def run_background_checks(user_id: int, task_id: str = None):
+async def run_background_checks(user_id: int):
     """Run periodic background checks for a specific user"""
     # ...existing code...
 

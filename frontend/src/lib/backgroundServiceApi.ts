@@ -9,18 +9,6 @@ export const getBackgroundServiceStatus = async () => {
 };
 
 /**
- * Enable or control the background service
- * @param enabled Boolean indicating whether to enable the service
- * @returns Promise with enable result
- */
-export const toggleBackgroundServiceControl = async (enabled: boolean) => {
-  return api.post("/api/background-service/enable", {
-    enabled: enabled,
-    force_auth: true
-  });
-};
-
-/**
  * Directly toggle the background service status
  * This will automatically handle both enabling and disabling based on current state
  */
@@ -82,21 +70,6 @@ export const updateBackgroundServicePreferences = async (preferences: {
  */
 export const getBackgroundServicePreferences = async () => {
   return api.get("/api/background-service/preferences");
-};
-
-/**
- * Check the background service run log
- * @param limit Maximum number of log entries to retrieve
- * @returns Promise with service log data
- */
-export const getBackgroundServiceLogs = async (limit: number = 10, offset: number = 0, eventType?: string) => {
-  return api.get("/api/background-service/logs", { 
-    params: { 
-      limit,
-      offset,
-      event_type: eventType
-    } 
-  });
 };
 
 /**

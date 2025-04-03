@@ -273,6 +273,26 @@ export default function Dashboard() {
     }
   }, [user]);
 
+  // Add polling for new emails
+  useEffect(() => {
+    console.log("Setting up email refresh interval...");
+
+    const intervalId = setInterval(() => {
+      if (!isCheckingEmails) {
+        console.log("Polling: Checking for new emails...");
+        handleCheckNewEmails();
+      } else {
+        console.log("Polling: Skipping check, refresh already in progress.");
+      }
+    }, 60000); // Check every 60 seconds
+
+    // Cleanup function to clear the interval when the component unmounts
+    return () => {
+      console.log("Clearing email refresh interval.");
+      clearInterval(intervalId);
+    };
+  }, [isCheckingEmails]); // Dependency array includes isCheckingEmails to prevent concurrent checks
+
   const fetchEmails = async (page = 1, append = false) => {
     try {
       // Check if token exists before making request

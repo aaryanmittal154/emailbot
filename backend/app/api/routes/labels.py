@@ -16,7 +16,6 @@ from app.schemas.label import (
     EmailLabelCreate,
     EmailLabelUpdate,
     ThreadLabelCreate,
-    ThreadLabelUpdate,
     ThreadLabelResponse,
     LabelSuggestionRequest,
     LabelSuggestionResponse,

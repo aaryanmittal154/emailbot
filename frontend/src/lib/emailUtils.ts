@@ -48,12 +48,3 @@ export const formatTimeSince = (timestamp: string): string => {
     Math.floor(diffSec / 86400) === 1 ? "" : "s"
   } ago`;
 };
-
-/**
- * Clear any stored email timestamps
- * Useful for logout or when resetting the email checking state
- */
-export const clearEmailTimestamps = (): void => {
-  if (typeof localStorage === "undefined") return;
-  localStorage.removeItem(LAST_EMAIL_CHECK_KEY);
-};

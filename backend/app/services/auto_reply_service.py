@@ -7,7 +7,6 @@ from datetime import datetime, timezone, timedelta
 import re
 from dateutil import parser
 import logging
-import uuid
 import json
 import base64
 import requests
