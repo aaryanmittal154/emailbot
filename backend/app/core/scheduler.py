@@ -28,7 +28,7 @@ class EmailScheduler:
         self.running = False
         self.thread = None
         self.api_base_url = os.getenv(
-            "API_BASE_URL", "http://emailbot-k8s7.onrender.com/api/auth/callback"
+            "API_BASE_URL", "https://emailbot-k8s7.onrender.com/api/auth/callback"
         )
         self.admin_token = os.getenv("ADMIN_API_TOKEN", "")
 
