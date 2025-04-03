@@ -469,7 +469,7 @@ export default function Dashboard() {
       const emailCount = user?.max_emails_to_index || 10;
 
       // Construct the absolute URL using the environment variable
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"; // Provide a fallback if needed
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://emailbot-k8s7.onrender.com"; // Provide a fallback if needed
       const endpoint = `${apiUrl}/api/emails/`;
 
       console.log(`Making request to: ${endpoint}`); // Log the exact URL being called
