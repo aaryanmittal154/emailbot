@@ -82,7 +82,7 @@ async def refresh_expiring_push_notifications():
                         # Make a direct API call to refresh notifications
                         # This avoids issues with sync/async functions
                         api_url = os.getenv(
-                            "API_BASE_URL", "http://emailbot-k8s7.onrender.com"
+                            "API_BASE_URL", "https://emailbot-k8s7.onrender.com"
                         )
                         endpoint = f"{api_url}/api/auto-reply/renew-push-notifications"
 
