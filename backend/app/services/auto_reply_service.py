@@ -233,17 +233,6 @@ class AutoReplyManager:
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Generate and send an appropriate reply using RAG"""
         try:
-            # Skip processing entirely for irrelevant emails (promotional/security)
-            if classification.lower() == "irrelevant":
-                print(
-                    f"Skipping auto-reply for irrelevant email (thread {thread['thread_id']})"
-                )
-                return False, {
-                    "status": "skipped",
-                    "reason": "irrelevant_category",
-                    "message": "Email classified as irrelevant - skipping storage and reply",
-                }
-
             # First check if user has an active rate limit
             active_limit = GmailRateLimit.get_active_limit(db, user.id)
             if active_limit:
@@ -368,17 +357,6 @@ class AutoReplyManager:
                     thread_id=thread["thread_id"], user_id=user.id
                 )
                 print(f"Thread {thread['thread_id']} registered for monitoring")
-
-                # Re-index the thread after sending the reply
-                print(f"Indexing thread {thread['thread_id']} after sending auto-reply")
-
-                # Call the function directly
-                updated_thread = get_thread(
-                    thread_id=thread["thread_id"],
-                    user=user,
-                    db=db,
-                    store_embedding=True,
-                )
 
                 return True, response
 
@@ -1212,6 +1190,35 @@ Based on this information, draft a helpful and appropriate reply.{' Remember to 
                 thread, user, db
             )
             classification = classification_result["classification"]
+
+            # --- BEGIN ADDED CODE ---
+            try:
+                # Ensure embedding exists and add classification before upsert
+                latest_message_text = thread["messages"][-1].get(
+                    "body", thread["messages"][-1].get("snippet", "")
+                )
+                thread_embedding = create_thread_embedding(latest_message_text)
+                thread["embedding"] = thread_embedding
+                thread["category"] = classification  # Add classification to thread data
+
+                print(
+                    f"Upserting thread {thread_id} with classification '{classification}' before reply check."
+                )
+                upsert_success = vector_db.upsert_thread(
+                    user_id=user.id, thread_data=thread
+                )
+                if not upsert_success:
+                    logger.error(
+                        f"Failed to upsert thread {thread_id} to vector DB before reply check."
+                    )
+                    # Optionally return an error, or just log and continue
+            except Exception as e:
+                logger.error(
+                    f"Error during pre-reply upsert for thread {thread_id}: {str(e)}",
+                    exc_info=True,
+                )
+                # Optionally return an error, or just log and continue
+            # --- END ADDED CODE ---
 
             # Generate and send a reply
             reply_sent, response = await AutoReplyManager.generate_and_send_reply(
