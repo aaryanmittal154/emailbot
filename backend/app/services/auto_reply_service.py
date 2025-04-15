@@ -316,6 +316,21 @@ class AutoReplyManager:
             print(context)
             print("============================================")
 
+            # --- BEGIN ADDED IRRELEVANT CHECK ---
+            # Skip actual reply generation/sending if classified as irrelevant
+            if classification.lower() == "irrelevant":
+                print(
+                    f"Skipping reply generation for irrelevant email (thread {thread['thread_id']}) - already stored."
+                )
+                # Even though we skip the reply, return True for success because the process didn't fail
+                # The caller (process_single_email) will check the 'response' dictionary for status
+                return False, {  # Return False for reply_sent flag
+                    "status": "skipped",
+                    "reason": "irrelevant_category",
+                    "message": "Email classified as irrelevant - skipping reply generation",
+                }
+            # --- END ADDED IRRELEVANT CHECK ---
+
             # Generate the reply using gpt-4o
             reply_content = await AutoReplyManager._generate_reply_with_gpt(
                 thread=thread,
@@ -1192,33 +1207,56 @@ Based on this information, draft a helpful and appropriate reply.{' Remember to 
             classification = classification_result["classification"]
 
             # --- BEGIN ADDED CODE ---
-            try:
-                # Ensure embedding exists and add classification before upsert
-                latest_message_text = thread["messages"][-1].get(
-                    "body", thread["messages"][-1].get("snippet", "")
+            # Check if thread data includes text_content required for upsert
+            if not thread.get("text_content"):
+                logger.warning(
+                    f"Thread {thread_id} is missing 'text_content'. Skipping pre-reply upsert."
                 )
-                thread_embedding = create_thread_embedding(latest_message_text)
-                thread["embedding"] = thread_embedding
-                thread["category"] = classification  # Add classification to thread data
+            else:
+                try:
+                    # Ensure embedding exists and add classification before upsert
+                    latest_message_text = thread["messages"][-1].get(
+                        "body", thread["messages"][-1].get("snippet", "")
+                    )
+                    thread_embedding = create_thread_embedding(latest_message_text)
+                    thread["embedding"] = thread_embedding
+                    thread["category"] = (
+                        classification  # Add classification to thread data
+                    )
 
-                print(
-                    f"Upserting thread {thread_id} with classification '{classification}' before reply check."
-                )
-                upsert_success = vector_db.upsert_thread(
-                    user_id=user.id, thread_data=thread
-                )
-                if not upsert_success:
+                    print(
+                        f"Upserting thread {thread_id} with classification '{classification}' before reply check."
+                    )
+                    upsert_success = vector_db.upsert_thread(
+                        user_id=user.id, thread_data=thread
+                    )
+                    if not upsert_success:
+                        logger.error(
+                            f"Failed to upsert thread {thread_id} to vector DB before reply check."
+                        )
+                        # Optionally return an error, or just log and continue
+                except Exception as e:
                     logger.error(
-                        f"Failed to upsert thread {thread_id} to vector DB before reply check."
+                        f"Error during pre-reply upsert for thread {thread_id}: {str(e)}",
+                        exc_info=True,
                     )
                     # Optionally return an error, or just log and continue
-            except Exception as e:
-                logger.error(
-                    f"Error during pre-reply upsert for thread {thread_id}: {str(e)}",
-                    exc_info=True,
-                )
-                # Optionally return an error, or just log and continue
             # --- END ADDED CODE ---
+
+            # --- BEGIN ADDED IRRELEVANT CHECK ---
+            # Skip actual reply generation/sending if classified as irrelevant
+            if classification.lower() == "irrelevant":
+                print(
+                    f"Skipping reply generation for irrelevant email (thread {thread['thread_id']}) - already stored."
+                )
+                # Even though we skip the reply, return True for success because the process didn't fail
+                # The caller (process_single_email) will check the 'response' dictionary for status
+                return False, {  # Return False for reply_sent flag
+                    "status": "skipped",
+                    "reason": "irrelevant_category",
+                    "message": "Email classified as irrelevant - skipping reply generation",
+                }
+            # --- END ADDED IRRELEVANT CHECK ---
 
             # Generate and send a reply
             reply_sent, response = await AutoReplyManager.generate_and_send_reply(
