@@ -10,10 +10,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 import os
 from sqlalchemy.orm import aliased
-import logging
-
-# Initialize logger
-logger = logging.getLogger(__name__)
 
 from app.db.database import get_db
 from app.models.user import User
@@ -383,8 +379,12 @@ def get_thread(
                     ),
                     "subject": email_metadata.subject or "",
                     "snippet": email_metadata.snippet or "",
-                    "body": body_content,  # Use generated or empty body
-                    "full_content": email_metadata.full_content,  # Add the full content from DB if available
+                    "body": (
+                        body_content
+                        if body_content
+                        else f"<div>{email_metadata.snippet or ''}</div>"
+                    ),
+                    "full_content": email_metadata.full_content,  # Add the full content from DB
                     "date": (
                         email_metadata.date.isoformat() if email_metadata.date else None
                     ),
@@ -401,9 +401,7 @@ def get_thread(
                         if email_metadata.updated_at
                         else None
                     ),
-                    # Add internal date from Gmail for precise sorting
-                    "internal_date": email_metadata.internal_date,  # Use stored internal date
-                    # Track message position in conversation
+                    "internal_date": 0,  # Unknown for cached messages
                     "message_position": {"is_first": False, "is_last": False},
                 }
                 messages.append(email_dict)
@@ -411,11 +409,11 @@ def get_thread(
                 # Extract participants
                 if email_metadata.sender:
                     participants.add(email_metadata.sender)
-                if email_metadata.recipients:
-                    for recipient in email_metadata.recipients:
-                        participants.add(recipient)
 
-                # Extract subject (use the first message's subject as the thread subject)
+                for recipient in email_metadata.recipients or []:
+                    participants.add(recipient)
+
+                # Extract subject
                 if email_metadata.subject and not subject:
                     subject = email_metadata.subject
 
@@ -423,74 +421,42 @@ def get_thread(
                 if email_metadata.date and email_metadata.date > last_updated:
                     last_updated = email_metadata.date
 
-        # Sort messages chronologically using internalDate from Gmail API
-        # This is more reliable than the 'Date' header
-        messages.sort(key=lambda x: x.get("internal_date", 0))
+        # Sort messages chronologically by internalDate
+        messages.sort(key=lambda x: x["internal_date"])
 
-        # Mark first and last message
+        # Mark first and last messages
         if messages:
             messages[0]["message_position"]["is_first"] = True
             messages[-1]["message_position"]["is_last"] = True
 
-        # --- BEGIN ADDED CODE for text_content ---
-        # Combine snippets or bodies for full thread text content
-        full_thread_text_content = "\n\n".join(
-            [
-                msg.get("body") or msg.get("snippet", "")
-                for msg in messages
-                if msg.get("body") or msg.get("snippet")
-            ]
-        )
-        # --- END ADDED CODE ---
-
-        # Create the final thread dictionary
-        final_thread_data = {
+        # Create thread response
+        thread_response = {
             "thread_id": thread_id,
+            "messages": messages,
             "subject": subject or "(No Subject)",
             "participants": list(participants),
             "message_count": len(messages),
-            "messages": messages,  # Chronologically sorted messages
-            "last_updated": last_updated.isoformat(),
-            "text_content": full_thread_text_content,  # Add the combined text content
+            "last_updated": (
+                last_updated.isoformat()
+                if last_updated != datetime.min.replace(tzinfo=timezone.utc)
+                else datetime.now(timezone.utc).isoformat()
+            ),
         }
 
-        # If requested, create and store embedding
+        # Generate embedding and store in vector database if requested
         if store_embedding:
-            print(f"Generating embedding for thread {thread_id}")
-            # Combine snippets/bodies for embedding source
-            text_for_embedding = "\n".join([msg.get("snippet", "") for msg in messages])
-            embedding = process_thread_for_semantic_search(text_for_embedding)
+            try:
+                # Process thread for semantic search
+                enhanced_thread = process_thread_for_semantic_search(thread_response)
 
-            if embedding:
-                print(f"Storing embedding for thread {thread_id} in vector DB")
-                final_thread_data["embedding"] = embedding
+                # Store in vector database
+                vector_db.upsert_thread(user.id, enhanced_thread)
 
-                # Add category info if available
-                # Fetch category from DB - Use runtime import
-                from app.models.email_label import ThreadLabel, LabelCategory
+                print(f"Thread {thread_id} embedding stored in vector database")
+            except Exception as e:
+                print(f"Error storing thread embedding: {str(e)}")
 
-                label_entry = (
-                    db.query(ThreadLabel)
-                    .join(LabelCategory)
-                    .filter(ThreadLabel.thread_id == thread_id)
-                    .first()
-                )
-                if label_entry:
-                    final_thread_data["category"] = label_entry.label_category.name
-                else:
-                    final_thread_data["category"] = ""
-
-                # Upsert to vector DB
-                vector_db.upsert_thread(user_id=user.id, thread_data=final_thread_data)
-            else:
-                print(f"Failed to create embedding for thread {thread_id}")
-
-        # --- BEGIN ADDED LOGGING ---
-        logger.info(
-            f"get_thread returning data for {thread_id} with text_content length: {len(final_thread_data.get('text_content', ''))}"
-        )
-        # --- END ADDED LOGGING ---
-        return final_thread_data
+        return thread_response
     except Exception as e:
         print(f"Error in get_thread: {str(e)}")
         raise

@@ -233,6 +233,17 @@ class AutoReplyManager:
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Generate and send an appropriate reply using RAG"""
         try:
+            # Skip processing entirely for irrelevant emails (promotional/security)
+            if classification.lower() == "irrelevant":
+                print(
+                    f"Skipping auto-reply for irrelevant email (thread {thread['thread_id']})"
+                )
+                return False, {
+                    "status": "skipped",
+                    "reason": "irrelevant_category",
+                    "message": "Email classified as irrelevant - skipping reply",
+                }
+
             # First check if user has an active rate limit
             active_limit = GmailRateLimit.get_active_limit(db, user.id)
             if active_limit:
@@ -240,21 +251,6 @@ class AutoReplyManager:
                     "status": "rate_limited",
                     "retry_after": active_limit.retry_after.isoformat(),
                 }
-
-            # --- MOVED IRRELEVANT CHECK HERE ---
-            # Skip actual reply generation/sending if classified as irrelevant
-            if classification.lower() == "irrelevant":
-                print(
-                    f"Skipping reply generation for irrelevant email (thread {thread['thread_id']}) - already stored."
-                )
-                # Even though we skip the reply, return True for success because the process didn't fail
-                # The caller (process_single_email) will check the 'response' dictionary for status
-                return False, {  # Return False for reply_sent flag
-                    "status": "skipped",
-                    "reason": "irrelevant_category",
-                    "message": "Email classified as irrelevant - skipping reply generation",
-                }
-            # --- END MOVED IRRELEVANT CHECK ---
 
             # Extract the latest message content for the query
             latest_message = thread["messages"][-1]
@@ -372,6 +368,17 @@ class AutoReplyManager:
                     thread_id=thread["thread_id"], user_id=user.id
                 )
                 print(f"Thread {thread['thread_id']} registered for monitoring")
+
+                # Re-index the thread after sending the reply
+                print(f"Indexing thread {thread['thread_id']} after sending auto-reply")
+
+                # Call the function directly
+                updated_thread = get_thread(
+                    thread_id=thread["thread_id"],
+                    user=user,
+                    db=db,
+                    store_embedding=True,
+                )
 
                 return True, response
 
@@ -1028,22 +1035,12 @@ Based on this information, draft a helpful and appropriate reply.{' Remember to 
                                 user=user, db=db, email_id=message_id, use_html=False
                             )
 
-                            # --- BEGIN ADDED CHECK ---
-                            # Ensure result is a dictionary before accessing keys
-                            if isinstance(result, dict):
-                                # --- END ADDED CHECK ---
-                                if result.get(
-                                    "success"
-                                ) and "Auto-reply sent successfully" in result.get(
-                                    "message", ""
-                                ):
-                                    replied_count += 1
-                            # --- BEGIN ADDED CHECK (ELSE) ---
-                            else:
-                                logger.error(
-                                    f"process_single_email returned non-dict type for message {message_id}: {type(result)} - {result}"
-                                )
-                            # --- END ADDED CHECK (ELSE) ---
+                            if result.get(
+                                "success"
+                            ) and "Auto-reply sent successfully" in result.get(
+                                "message", ""
+                            ):
+                                replied_count += 1
 
                 # Get the latest history ID for future queries
                 new_history_id = history_results.get("historyId")
@@ -1216,67 +1213,9 @@ Based on this information, draft a helpful and appropriate reply.{' Remember to 
             )
             classification = classification_result["classification"]
 
-            # --- BEGIN ADDED CODE ---
-            # Check if thread data includes text_content required for upsert
-            if not thread.get("text_content", "").strip():
-                logger.warning(
-                    f"Thread {thread_id} has missing or empty 'text_content'. Skipping pre-reply upsert."
-                )
-            else:
-                try:
-                    # Ensure embedding exists and add classification before upsert
-                    latest_message_text = thread["messages"][-1].get(
-                        "body", thread["messages"][-1].get("snippet", "")
-                    )
-                    thread_embedding = create_thread_embedding(latest_message_text)
-                    thread["embedding"] = thread_embedding
-                    thread["category"] = (
-                        classification  # Add classification to thread data
-                    )
-
-                    print(
-                        f"Upserting thread {thread_id} with classification '{classification}' before reply check."
-                    )
-                    upsert_success = vector_db.upsert_thread(
-                        user_id=user.id, thread_data=thread
-                    )
-                    if not upsert_success:
-                        logger.error(
-                            f"Failed to upsert thread {thread_id} to vector DB before reply check."
-                        )
-                        # Optionally return an error, or just log and continue
-                except Exception as e:
-                    logger.error(
-                        f"Error during pre-reply upsert for thread {thread_id}: {str(e)}",
-                        exc_info=True,
-                    )
-                    # Optionally return an error, or just log and continue
-            # --- END ADDED CODE ---
-
-            # --- REMOVED DUPLICATE IRRELEVANT CHECK START ---
-            # # --- BEGIN ADDED IRRELEVANT CHECK ---
-            # # Skip actual reply generation/sending if classified as irrelevant
-            # if classification.lower() == "irrelevant":
-            #     print(
-            #         f"Skipping reply generation for irrelevant email (thread {thread[\'thread_id\']}) - already stored."
-            #     )
-            #     # Even though we skip the reply, return True for success because the process didn't fail
-            #     # The caller (process_single_email) will check the \'response\' dictionary for status
-            #     return False, { # Return False for reply_sent flag
-            #         "status": "skipped",
-            #         "reason": "irrelevant_category",
-            #         "message": "Email classified as irrelevant - skipping reply generation",
-            #     }
-            # # --- END ADDED IRRELEVANT CHECK ---
-            # --- REMOVED DUPLICATE IRRELEVANT CHECK END ---
-
-            # Generate the reply using gpt-4o
-            reply_content = await AutoReplyManager._generate_reply_with_gpt(
-                thread=thread,
-                latest_message=latest_message,
-                context=context,
-                user_email=user.email,
-                classification=classification,
+            # Generate and send a reply
+            reply_sent, response = await AutoReplyManager.generate_and_send_reply(
+                thread, user, db, use_html, classification
             )
 
             # --- ADD MONITORING CALL HERE after reply attempt ---
