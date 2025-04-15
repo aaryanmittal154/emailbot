@@ -10,6 +10,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 import os
 from sqlalchemy.orm import aliased
+import logging
+
+# Initialize logger
+logger = logging.getLogger(__name__)
 
 from app.db.database import get_db
 from app.models.user import User
