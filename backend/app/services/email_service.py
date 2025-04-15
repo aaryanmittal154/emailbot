@@ -481,6 +481,11 @@ def get_thread(
             else:
                 print(f"Failed to create embedding for thread {thread_id}")
 
+        # --- BEGIN ADDED LOGGING ---
+        logger.info(
+            f"get_thread returning data for {thread_id} with text_content length: {len(final_thread_data.get('text_content', ''))}"
+        )
+        # --- END ADDED LOGGING ---
         return final_thread_data
     except Exception as e:
         print(f"Error in get_thread: {str(e)}")

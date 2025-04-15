@@ -241,6 +241,21 @@ class AutoReplyManager:
                     "retry_after": active_limit.retry_after.isoformat(),
                 }
 
+            # --- MOVED IRRELEVANT CHECK HERE ---
+            # Skip actual reply generation/sending if classified as irrelevant
+            if classification.lower() == "irrelevant":
+                print(
+                    f"Skipping reply generation for irrelevant email (thread {thread['thread_id']}) - already stored."
+                )
+                # Even though we skip the reply, return True for success because the process didn't fail
+                # The caller (process_single_email) will check the 'response' dictionary for status
+                return False, {  # Return False for reply_sent flag
+                    "status": "skipped",
+                    "reason": "irrelevant_category",
+                    "message": "Email classified as irrelevant - skipping reply generation",
+                }
+            # --- END MOVED IRRELEVANT CHECK ---
+
             # Extract the latest message content for the query
             latest_message = thread["messages"][-1]
             latest_message_text = latest_message.get(
@@ -315,21 +330,6 @@ class AutoReplyManager:
             print("============= CONTEXT FOR LLM =============")
             print(context)
             print("============================================")
-
-            # --- BEGIN ADDED IRRELEVANT CHECK ---
-            # Skip actual reply generation/sending if classified as irrelevant
-            if classification.lower() == "irrelevant":
-                print(
-                    f"Skipping reply generation for irrelevant email (thread {thread['thread_id']}) - already stored."
-                )
-                # Even though we skip the reply, return True for success because the process didn't fail
-                # The caller (process_single_email) will check the 'response' dictionary for status
-                return False, {  # Return False for reply_sent flag
-                    "status": "skipped",
-                    "reason": "irrelevant_category",
-                    "message": "Email classified as irrelevant - skipping reply generation",
-                }
-            # --- END ADDED IRRELEVANT CHECK ---
 
             # Generate the reply using gpt-4o
             reply_content = await AutoReplyManager._generate_reply_with_gpt(
@@ -1028,12 +1028,22 @@ Based on this information, draft a helpful and appropriate reply.{' Remember to 
                                 user=user, db=db, email_id=message_id, use_html=False
                             )
 
-                            if result.get(
-                                "success"
-                            ) and "Auto-reply sent successfully" in result.get(
-                                "message", ""
-                            ):
-                                replied_count += 1
+                            # --- BEGIN ADDED CHECK ---
+                            # Ensure result is a dictionary before accessing keys
+                            if isinstance(result, dict):
+                                # --- END ADDED CHECK ---
+                                if result.get(
+                                    "success"
+                                ) and "Auto-reply sent successfully" in result.get(
+                                    "message", ""
+                                ):
+                                    replied_count += 1
+                            # --- BEGIN ADDED CHECK (ELSE) ---
+                            else:
+                                logger.error(
+                                    f"process_single_email returned non-dict type for message {message_id}: {type(result)} - {result}"
+                                )
+                            # --- END ADDED CHECK (ELSE) ---
 
                 # Get the latest history ID for future queries
                 new_history_id = history_results.get("historyId")
@@ -1208,9 +1218,9 @@ Based on this information, draft a helpful and appropriate reply.{' Remember to 
 
             # --- BEGIN ADDED CODE ---
             # Check if thread data includes text_content required for upsert
-            if not thread.get("text_content"):
+            if not thread.get("text_content", "").strip():
                 logger.warning(
-                    f"Thread {thread_id} is missing 'text_content'. Skipping pre-reply upsert."
+                    f"Thread {thread_id} has missing or empty 'text_content'. Skipping pre-reply upsert."
                 )
             else:
                 try:
@@ -1243,24 +1253,30 @@ Based on this information, draft a helpful and appropriate reply.{' Remember to 
                     # Optionally return an error, or just log and continue
             # --- END ADDED CODE ---
 
-            # --- BEGIN ADDED IRRELEVANT CHECK ---
-            # Skip actual reply generation/sending if classified as irrelevant
-            if classification.lower() == "irrelevant":
-                print(
-                    f"Skipping reply generation for irrelevant email (thread {thread['thread_id']}) - already stored."
-                )
-                # Even though we skip the reply, return True for success because the process didn't fail
-                # The caller (process_single_email) will check the 'response' dictionary for status
-                return False, {  # Return False for reply_sent flag
-                    "status": "skipped",
-                    "reason": "irrelevant_category",
-                    "message": "Email classified as irrelevant - skipping reply generation",
-                }
-            # --- END ADDED IRRELEVANT CHECK ---
+            # --- REMOVED DUPLICATE IRRELEVANT CHECK START ---
+            # # --- BEGIN ADDED IRRELEVANT CHECK ---
+            # # Skip actual reply generation/sending if classified as irrelevant
+            # if classification.lower() == "irrelevant":
+            #     print(
+            #         f"Skipping reply generation for irrelevant email (thread {thread[\'thread_id\']}) - already stored."
+            #     )
+            #     # Even though we skip the reply, return True for success because the process didn't fail
+            #     # The caller (process_single_email) will check the \'response\' dictionary for status
+            #     return False, { # Return False for reply_sent flag
+            #         "status": "skipped",
+            #         "reason": "irrelevant_category",
+            #         "message": "Email classified as irrelevant - skipping reply generation",
+            #     }
+            # # --- END ADDED IRRELEVANT CHECK ---
+            # --- REMOVED DUPLICATE IRRELEVANT CHECK END ---
 
-            # Generate and send a reply
-            reply_sent, response = await AutoReplyManager.generate_and_send_reply(
-                thread, user, db, use_html, classification
+            # Generate the reply using gpt-4o
+            reply_content = await AutoReplyManager._generate_reply_with_gpt(
+                thread=thread,
+                latest_message=latest_message,
+                context=context,
+                user_email=user.email,
+                classification=classification,
             )
 
             # --- ADD MONITORING CALL HERE after reply attempt ---
