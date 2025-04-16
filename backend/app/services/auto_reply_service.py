@@ -1,15 +1,14 @@
+import logging
+
+from fastapi import Depends, HTTPException
 from openai import OpenAI
 import os
 from typing import List, Dict, Any, Optional, Tuple
-from sqlalchemy.orm import Session
-from fastapi import Depends, HTTPException, status
 from datetime import datetime, timezone, timedelta
 import re
 from dateutil import parser
-import logging
-import json
-import base64
-import requests
+from sqlalchemy.orm import Session
+from starlette import status
 
 from app.db.database import get_db
 from app.models.user import User
@@ -22,20 +21,19 @@ from app.models.gmail_rate_limit import GmailRateLimit
 from app.services.email_service import get_thread, get_gmail_service, send_email
 from app.services.auth_service import get_current_user, get_google_creds
 from app.services.embedding_service import create_thread_embedding
-from app.services.vector_db_service import vector_db
+from app.services.hybrid_search_service import HybridSearchService
 from app.services.email_classifier_service import email_classifier
 from app.schemas.email import SendEmailRequest
-from app.services.match_service import match_service
-from app.db.database import SessionLocal
-from app.utils.thread_utils import get_thread_category
 from app.core.config import settings
 from app.services.thread_monitoring_service import ThreadMonitoringService
+from app.utils.categories import IRRELEVANT, CANDIDATE, EVENT, OTHER, JOB_POSTING, QUESTIONS, \
+    DISCUSSION_TOPICS
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Constants
-MAX_CONTEXT_THREADS = 3  # Number of similar threads to use for context
+MAX_CONTEXT_THREADS = 6  # Number of similar threads to use for context
 NEW_EMAIL_THRESHOLD = timedelta(
     hours=1
 )  # Only process emails received in the last hour
@@ -234,7 +232,7 @@ class AutoReplyManager:
         """Generate and send an appropriate reply using RAG"""
         try:
             # Skip processing entirely for irrelevant emails (promotional/security)
-            if classification.lower() == "irrelevant":
+            if classification.lower() == IRRELEVANT.lower():
                 print(
                     f"Skipping auto-reply for irrelevant email (thread {thread['thread_id']})"
                 )
@@ -277,11 +275,11 @@ class AutoReplyManager:
 
             # For job postings, find candidate threads; for candidates, find job postings
             complementary_category = None
-            if classification.lower() == "job posting":
-                complementary_category = "candidate"
+            if classification.lower() == JOB_POSTING.lower():
+                complementary_category = CANDIDATE
                 print(f"This is a job posting, searching for matching candidates")
-            elif classification.lower() == "candidate":
-                complementary_category = "job posting"
+            elif classification.lower() == CANDIDATE.lower():
+                complementary_category = JOB_POSTING
                 print(f"This is a candidate, searching for matching job postings")
             else:
                 print(
@@ -290,10 +288,12 @@ class AutoReplyManager:
 
             # First try with category filtering
             try:
-                similar_threads = vector_db.search_threads(
-                    user.id,
-                    query_embedding,
-                    MAX_CONTEXT_THREADS,
+                similar_threads = HybridSearchService.hybrid_search(
+                    db=db,
+                    user_id=user.id,
+                    query=latest_message_text,
+                    embedding=query_embedding,
+                    top_k=MAX_CONTEXT_THREADS,
                     filter_category=complementary_category,
                 )
 
@@ -302,16 +302,25 @@ class AutoReplyManager:
                     print(
                         f"No {complementary_category.lower()} threads found, falling back to general search"
                     )
-                    similar_threads = vector_db.search_threads(
-                        user.id, query_embedding, MAX_CONTEXT_THREADS
+                    similar_threads = HybridSearchService.hybrid_search(
+                        db=db,
+                        user_id=user.id,
+                        query=latest_message_text,
+                        embedding=query_embedding,
+                        top_k=MAX_CONTEXT_THREADS,
                     )
+
             except Exception as search_error:
                 print(
                     f"Error during vector search: {str(search_error)}, falling back to general search"
                 )
                 # Fall back to general search without filtering
-                similar_threads = vector_db.search_threads(
-                    user.id, query_embedding, MAX_CONTEXT_THREADS
+                similar_threads = HybridSearchService.hybrid_search(
+                    db=db,
+                    user_id=user.id,
+                    query=latest_message_text,
+                    embedding=query_embedding,
+                    top_k=MAX_CONTEXT_THREADS,
                 )
 
             print(f"Found {len(similar_threads)} similar threads")
@@ -616,7 +625,7 @@ DO NOT:
                             .filter(
                                 CustomPrompt.user_id == user.id,
                                 CustomPrompt.category
-                                == "Other",  # Use "Other" as the generic category
+                                == OTHER,  # Use "Other" as the generic category
                                 CustomPrompt.prompt_type == "auto_reply",
                             )
                             .first()
@@ -629,18 +638,18 @@ DO NOT:
                         )
                     else:
                         # Use appropriate default prompt based on classification
-                        if classification.lower() in ["job posting"]:
+                        if classification.lower() in [JOB_POSTING.lower()]:
                             system_prompt = (
                                 AutoReplyManager.get_default_job_posting_prompt()
                             )
-                        elif classification.lower() in ["candidate"]:
+                        elif classification.lower() in [CANDIDATE.lower()]:
                             system_prompt = (
                                 AutoReplyManager.get_default_candidate_prompt()
                             )
                         elif classification.lower() in [
-                            "questions",
-                            "discussion topics",
-                            "event",
+                            QUESTIONS.lower(),
+                            DISCUSSION_TOPICS.lower(),
+                            EVENT.lower(),
                         ]:
                             system_prompt = (
                                 AutoReplyManager.get_default_context_only_prompt()
@@ -688,10 +697,10 @@ Based on this information, draft a helpful and appropriate reply.{' Remember to 
                 f"Using classification: {classification} (lowercase: {classification.lower()})"
             )
             print(
-                f"Is this a context-only category? {classification.lower() in ['other events', 'questions', 'discussion topic']}"
+                f"Is this a context-only category? {classification.lower() in [QUESTIONS.lower(), DISCUSSION_TOPICS.lower(), EVENT.lower()]}"
             )
             print(
-                f"Is this a matching category? {classification.lower() in ['job posting', 'candidate']}"
+                f"Is this a matching category? {classification.lower() in [JOB_POSTING.lower(), CANDIDATE.lower()]}"
             )
 
             response = client.chat.completions.create(
@@ -703,7 +712,7 @@ Based on this information, draft a helpful and appropriate reply.{' Remember to 
                 temperature=(
                     0.3
                     if classification.lower()
-                    in ["other events", "questions", "discussion topic"]
+                    in [OTHER.lower(), QUESTIONS.lower(), DISCUSSION_TOPICS.lower(), EVENT.lower()]
                     else 0.7
                 ),
                 max_tokens=800,

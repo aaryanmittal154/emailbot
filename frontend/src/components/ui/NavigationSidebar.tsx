@@ -90,8 +90,9 @@ const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
       setIsOpen: setManagementOpen,
       items: [
         { name: "Events", icon: FiCalendar, tabIndex: 5 },
-        { name: "Other", icon: FiFolder, tabIndex: 6 },
-        { name: "Irrelevant", icon: FiFilter, tabIndex: 7 },
+        { name: "Resources", icon: FiFolder, tabIndex: 6 },
+        { name: "Other", icon: FiFolder, tabIndex: 7 },
+        { name: "Irrelevant", icon: FiFilter, tabIndex: 8 },
       ],
     },
   ];

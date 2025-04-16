@@ -6,6 +6,8 @@ This module helps prevent circular imports by providing common functionality.
 from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session
 
+from app.utils.categories import JOB_POSTING, CANDIDATE, EVENT
+
 
 def get_thread_category(thread_id: str, user_id: int, db: Session) -> str:
     """
@@ -29,7 +31,9 @@ def get_thread_category(thread_id: str, user_id: int, db: Session) -> str:
             .filter(
                 ThreadLabel.thread_id == thread_id,
                 ThreadLabel.user_id == user_id,
-                EmailLabel.name.in_(["Job Posting", "Candidate", "Event"]),
+                EmailLabel.name.in_(
+                    [JOB_POSTING, CANDIDATE, EVENT]
+                ),
             )
             .order_by(ThreadLabel.confidence.desc())
             .first()

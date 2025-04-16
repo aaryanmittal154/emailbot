@@ -20,9 +20,6 @@ import {
   Th,
   Td,
   Badge,
-  Input,
-  InputGroup,
-  InputRightElement,
   IconButton,
   Tabs,
   TabList,
@@ -242,6 +239,7 @@ export default function Dashboard() {
   const [events, setEvents] = useState<any[]>([]);
   const [questions, setQuestions] = useState<any[]>([]);
   const [discussions, setDiscussions] = useState<any[]>([]);
+  const [resources, setResources] = useState<any[]>([]);
   const [otherEmails, setOtherEmails] = useState<any[]>([]);
   const [irrelevantEmails, setIrrelevantEmails] = useState<any[]>([]);
   const [loadingLabeled, setLoadingLabeled] = useState<boolean>(false);
@@ -640,6 +638,7 @@ export default function Dashboard() {
         "Candidate",
         "Question",
         "Follow-up",
+        "Resource"
       ];
       const matchedCategory = threadLabels.find((label) =>
         categoryLabels.includes(label)
@@ -828,6 +827,7 @@ export default function Dashboard() {
         candidatesRes,
         eventsRes,
         questionsRes,
+        resourceRes,
         discussionsRes,
         otherRes,
         irrelevantRes,
@@ -836,6 +836,7 @@ export default function Dashboard() {
         getEmailsByLabel("Candidate", { refresh_db: true, t: cacheBuster }),
         getEmailsByLabel("Event", { refresh_db: true, t: cacheBuster }),
         getEmailsByLabel("Questions", { refresh_db: true, t: cacheBuster }),
+        getEmailsByLabel("Resource", { refresh_db: true, t: cacheBuster }),
         getEmailsByLabel("Discussion Topics", {
           refresh_db: true,
           t: cacheBuster,
@@ -851,6 +852,7 @@ export default function Dashboard() {
         Candidate: candidatesRes.data || [],
         Event: eventsRes.data || [],
         Questions: questionsRes.data || [],
+        Resource: resourceRes.data || [],
         "Discussion Topics": discussionsRes.data || [],
         Other: otherRes.data || [],
         Irrelevant: irrelevantRes.data || [],
@@ -885,6 +887,7 @@ export default function Dashboard() {
       setEvents(sortByDate(eventsRes.data || []));
       setQuestions(sortByDate(questionsRes.data || []));
       setDiscussions(sortByDate(discussionsRes.data || []));
+      setResources(sortByDate(resourceRes.data || []));
       setOtherEmails(sortByDate(otherRes.data || []));
       setIrrelevantEmails(sortByDate(irrelevantRes.data || []));
       console.log("Refreshed all labeled categories from database");
@@ -1961,12 +1964,7 @@ export default function Dashboard() {
     // Function to handle back button click
     const handleBackClick = () => {
       // Use browser's history back if available
-      if (window.history.state && window.history.state.view === "email") {
-        window.history.back();
-      } else {
-        // Fallback to explicit closeThread
-        closeThread();
-      }
+      closeThread();
     };
 
     return (
@@ -2520,6 +2518,19 @@ export default function Dashboard() {
 
             {tabIndex === 6 &&
               (selectedLabeledEmail &&
+              selectedLabeledEmail.category === "Resource" ? (
+                renderLabeledEmailView()
+              ) : (
+                <Box p={4} bg="white" borderRadius="md" shadow="sm">
+                  <Flex justify="space-between" align="center" mb={4}>
+                    <Heading size="md">Resources</Heading>
+                  </Flex>
+                  {renderLabeledEmailList(resources, "Resource")}
+                </Box>
+              ))}
+
+            {tabIndex === 7 &&
+              (selectedLabeledEmail &&
               selectedLabeledEmail.category === "Other" ? (
                 renderLabeledEmailView()
               ) : (
@@ -2531,7 +2542,7 @@ export default function Dashboard() {
                 </Box>
               ))}
 
-            {tabIndex === 7 &&
+            {tabIndex === 8 &&
               (selectedLabeledEmail &&
               selectedLabeledEmail.category === "Irrelevant" ? (
                 renderLabeledEmailView()
@@ -2546,7 +2557,7 @@ export default function Dashboard() {
                 </Box>
               ))}
 
-            {tabIndex === 8 && <PromptManagement />}
+            {tabIndex === 9 && <PromptManagement />}
 
             {/* Remove the redundant thread rendering since each tab now handles its own threads */}
           </Box>
