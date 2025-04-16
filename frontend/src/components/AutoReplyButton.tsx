@@ -108,12 +108,11 @@ const AutoReplyButton = ({
   // Save config changes
   const handleSaveConfig = async () => {
     try {
-      // const response = await updateAutoReplyConfig(config);
-      // setConfig(response.data);
-
+      // const response = await updateAutoReplyConfig(config); // Commented out - API function does not exist
+      // setConfig(response.data); // Commented out - Requires response from non-existent function
       toast({
-        title: "Success",
-        description: "Auto-reply configuration updated.",
+        title: "Success (Simulated)", // Indicate that this is not a real save
+        description: "Auto-reply configuration updated (locally).", // Adjust description
         status: "success",
         duration: 3000,
         isClosable: true,

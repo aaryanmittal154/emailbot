@@ -1,7 +1,8 @@
 import axios from "axios";
 
 // API endpoint base URL
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const BASE_URL =
+  process.env.NEXT_PUBLIC_API_URL || "https://emailbot-k8s7.onrender.com";
 
 console.log(`Using API URL: ${BASE_URL}`);
 

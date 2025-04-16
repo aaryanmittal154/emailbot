@@ -70,13 +70,6 @@ class VectorDBService:
             bool: Success status
         """
         try:
-            # Skip storing irrelevant emails (promotional/security)
-            if thread_data.get("category", "").lower() == "irrelevant":
-                print(
-                    f"Skipping storage of irrelevant email (thread {thread_data['thread_id']})"
-                )
-                return True  # Return true to avoid error logs, but we're not actually storing
-
             # Create a unique ID that combines user_id and thread_id
             vector_id = f"user_{user_id}_{thread_data['thread_id']}"
 

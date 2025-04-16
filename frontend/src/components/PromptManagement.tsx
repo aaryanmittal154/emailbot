@@ -28,7 +28,8 @@ import { InfoIcon, RepeatIcon, QuestionIcon } from "@chakra-ui/icons";
 import axios from "axios";
 
 // API endpoint base URL
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const BASE_URL =
+  process.env.NEXT_PUBLIC_API_URL || "https://emailbot-k8s7.onrender.com";
 
 // API helper functions
 const api = {

@@ -233,13 +233,24 @@ class AutoReplyManager:
         try:
             # Skip processing entirely for irrelevant emails (promotional/security)
             if classification.lower() == IRRELEVANT.lower():
+                # Store in Pinecone before skipping auto-reply
+                print(
+                    f"Indexing irrelevant thread {thread['thread_id']} in Pinecone before skipping auto-reply"
+                )
+                updated_thread = get_thread(
+                    thread_id=thread["thread_id"],
+                    user=user,
+                    db=db,
+                    store_embedding=True,
+                )
+
                 print(
                     f"Skipping auto-reply for irrelevant email (thread {thread['thread_id']})"
                 )
                 return False, {
                     "status": "skipped",
                     "reason": "irrelevant_category",
-                    "message": "Email classified as irrelevant - skipping storage and reply",
+                    "message": "Email classified as irrelevant - skipping reply",
                 }
 
             # First check if user has an active rate limit

@@ -73,6 +73,7 @@ import PromptManagement from "../../components/PromptManagement";
 import {
   getBackgroundServiceStatus,
   toggleBackgroundService,
+  getBackgroundServiceOAuthUrl,
 } from "../../lib/backgroundServiceApi";
 import { motion } from "framer-motion";
 import DashboardLayout from "../../components/ui/DashboardLayout";
@@ -474,7 +475,8 @@ export default function Dashboard() {
       const emailCount = user?.max_emails_to_index || 10;
 
       // Construct the absolute URL using the environment variable
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"; // Provide a fallback if needed
+      const apiUrl =
+        process.env.NEXT_PUBLIC_API_URL || "https://emailbot-k8s7.onrender.com"; // Provide a fallback if needed
       const endpoint = `${apiUrl}/api/emails/`;
 
       console.log(`Making request to: ${endpoint}`); // Log the exact URL being called
@@ -2072,8 +2074,11 @@ export default function Dashboard() {
       // For thoroughness, refresh any other data views in other tabs
       // if (tabIndex === 4) {
         // If Follow-ups tab is active or might be viewed
-        // await fetchSimilarEmails();
-      // }
+        // await fetchSimilarEmails(); // Original call - likely typo
+        // Corrected call to use the imported function:
+        // await getSimilarThreads(); // This function requires threadId and targetLabel, which are not available here. Commenting out for now.
+        // If getSimilarThreads requires a thread ID, this logic needs revision.
+      }
 
       // Update the UI to reflect refreshed data
       setIsLoading(false);
@@ -2207,18 +2212,46 @@ export default function Dashboard() {
 
         // Check if the failure requires authentication
         if (response.data.needs_auth) {
+          // Replace the previous toast call with one using the render prop
           toast({
-            title: "Authentication Required",
-            description:
-              "Please authorize the background service to access your email offline.",
-            status: "warning",
-            duration: 7000, // Longer duration
+            position: "top",
+            duration: 7000,
             isClosable: true,
-            // Add an action button to trigger the auth flow
-            // action: {
-            //   label: "Authorize Now",
-            //   onClick: initiateBackgroundAuth, // Call the new function
-            // },
+
+            render: ({ onClose }) => (
+              <Box
+                color="white"
+                p={4}
+                bg="yellow.500"
+                borderRadius="md"
+                shadow="md"
+              >
+                <Flex justify="space-between" align="center">
+                  <Box mr={3}>
+                    {" "}
+                    {/* Added margin for spacing */}
+                    <Text fontWeight="bold">Authentication Required</Text>
+                    <Text fontSize="sm">
+                      {" "}
+                      {/* Slightly smaller description */}
+                      Please authorize the background service to access your
+                      email offline.
+                    </Text>
+                  </Box>
+                  <Button
+                    variant="solid"
+                    colorScheme="whiteAlpha"
+                    size="sm"
+                    onClick={() => {
+                      initiateBackgroundAuth();
+                      onClose(); // Close toast after clicking
+                    }}
+                  >
+                    Authorize Now
+                  </Button>
+                </Flex>
+              </Box>
+            ),
           });
         } else {
           // Show generic error if auth is not the issue
@@ -2580,14 +2613,16 @@ export default function Dashboard() {
         </Flex>
       )}
 
-      {/* Onboarding Modal - Conditionally render based on state */}
+      {/* Onboarding Modal */}
       <OnboardingModal
         isOpen={showOnboardingModal}
         onClose={() => {
           setShowOnboardingModal(false);
-          // Refetch user data to get updated is_onboarded status
+          // Refresh user data in case preferences were updated
           getCurrentUser().then((res) => setUser(res.data));
         }}
+        onOnboardingComplete={handleOnboardingComplete}
+        // userId={user?.id} // Removed this prop as it's not defined in OnboardingModalProps
       />
 
       {/* Indexing Progress Modal */}
