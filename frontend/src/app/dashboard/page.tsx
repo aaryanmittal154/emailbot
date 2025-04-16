@@ -68,7 +68,6 @@ import {
   getNewEmails,
   refreshEmailsFromDatabase,
   getCurrentUser,
-  getBackgroundServiceOAuthUrl,
 } from "../../lib/api";
 import PromptManagement from "../../components/PromptManagement";
 import {
@@ -78,6 +77,7 @@ import {
 import { motion } from "framer-motion";
 import DashboardLayout from "../../components/ui/DashboardLayout";
 import he from "he"; // Add this import
+import { getBackgroundServiceOAuthUrl } from "../../lib/backgroundServiceApi";
 
 const BASE_URL = "https://emailbot-k8s7.onrender.com";
 
@@ -358,16 +358,23 @@ export default function Dashboard() {
         }
       } catch (error) {
         console.error("Error fetching user data:", error);
-        console.log(
-          "Axios error details:",
-          error.response
-            ? {
-                status: error.response.status,
-                statusText: error.response.statusText,
-                data: error.response.data,
-              }
-            : "No response details"
-        );
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "response" in error &&
+          typeof (error as any).response === "object"
+        ) {
+          console.log(
+            "Axios error details:",
+            error.response
+              ? {
+                  status: (error as any).response.status,
+                  statusText: (error as any).response.statusText,
+                  data: (error as any).response.data,
+                }
+              : "No response details"
+          );
+        }
 
         toast({
           title: "Authentication error",
@@ -640,7 +647,7 @@ export default function Dashboard() {
         "Follow-up",
         "Resource"
       ];
-      const matchedCategory = threadLabels.find((label) =>
+      const matchedCategory = threadLabels.find((label: string) =>
         categoryLabels.includes(label)
       );
 
@@ -1070,7 +1077,7 @@ export default function Dashboard() {
         } else {
           setSharedCandidates([]);
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error("Error fetching matches:", error);
         toast({
           title: "Error fetching matches",
@@ -2063,10 +2070,10 @@ export default function Dashboard() {
       await fetchLabeledEmails();
 
       // For thoroughness, refresh any other data views in other tabs
-      if (tabIndex === 4) {
+      // if (tabIndex === 4) {
         // If Follow-ups tab is active or might be viewed
-        await fetchSimilarEmails();
-      }
+        // await fetchSimilarEmails();
+      // }
 
       // Update the UI to reflect refreshed data
       setIsLoading(false);
@@ -2208,10 +2215,10 @@ export default function Dashboard() {
             duration: 7000, // Longer duration
             isClosable: true,
             // Add an action button to trigger the auth flow
-            action: {
-              label: "Authorize Now",
-              onClick: initiateBackgroundAuth, // Call the new function
-            },
+            // action: {
+            //   label: "Authorize Now",
+            //   onClick: initiateBackgroundAuth, // Call the new function
+            // },
           });
         } else {
           // Show generic error if auth is not the issue
@@ -2581,7 +2588,6 @@ export default function Dashboard() {
           // Refetch user data to get updated is_onboarded status
           getCurrentUser().then((res) => setUser(res.data));
         }}
-        userId={user?.id}
       />
 
       {/* Indexing Progress Modal */}

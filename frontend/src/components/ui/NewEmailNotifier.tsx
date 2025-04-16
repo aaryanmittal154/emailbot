@@ -202,7 +202,7 @@ const NewEmailNotifier: React.FC<NewEmailNotifierProps> = ({
       >
         <Tooltip label={lastCheckedTimestamp || "Never checked"}>
           <Flex alignItems="center" cursor="help">
-            <Icon as={FiRefreshCw} mr={1} spin={isChecking} />
+            <Icon as={FiRefreshCw} mr={1}/>
             <Text>
               {lastCheckedTimestamp
                 ? `Last checked: ${formatTimeSince(lastCheckedTimestamp)}`

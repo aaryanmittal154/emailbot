@@ -50,7 +50,7 @@ export const getEmails = async (params = {}) => {
   }
 };
 
-export const getThread = async (threadId) => {
+export const getThread = async (threadId: string) => {
   return api.get(`/api/emails/thread/${threadId}`);
 };
 
@@ -58,7 +58,7 @@ export const syncEmails = async () => {
   return api.post("/api/emails/sync");
 };
 
-export const searchEmails = async (query) => {
+export const searchEmails = async (query: string) => {
   return api.post("/api/emails/semantic-search", { query });
 };
 
@@ -143,7 +143,7 @@ export const getLabels = async () => {
   return api.get("/api/labels");
 };
 
-export const getLabelsByCategory = async (categoryId) => {
+export const getLabelsByCategory = async (categoryId: string) => {
   return api.get(`/api/labels/category/${categoryId}`);
 };
 
@@ -151,11 +151,11 @@ export const createLabel = async (labelData) => {
   return api.post("/api/labels", labelData);
 };
 
-export const updateLabel = async (labelId, labelData) => {
+export const updateLabel = async (labelId: number, labelData) => {
   return api.put(`/api/labels/${labelId}`, labelData);
 };
 
-export const deleteLabel = async (labelId) => {
+export const deleteLabel = async (labelId: number) => {
   return api.delete(`/api/labels/${labelId}`);
 };
 

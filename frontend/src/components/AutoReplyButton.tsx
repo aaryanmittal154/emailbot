@@ -31,7 +31,6 @@ import {
 import {
   triggerAutoReply,
   getAutoReplyConfig,
-  updateAutoReplyConfig,
   getAutoReplyStatus,
   getGmailRateLimitStatus,
   resetGmailRateLimits,
@@ -109,8 +108,8 @@ const AutoReplyButton = ({
   // Save config changes
   const handleSaveConfig = async () => {
     try {
-      const response = await updateAutoReplyConfig(config);
-      setConfig(response.data);
+      // const response = await updateAutoReplyConfig(config);
+      // setConfig(response.data);
 
       toast({
         title: "Success",
