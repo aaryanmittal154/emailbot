@@ -73,7 +73,6 @@ import PromptManagement from "../../components/PromptManagement";
 import {
   getBackgroundServiceStatus,
   toggleBackgroundService,
-  getBackgroundServiceOAuthUrl,
 } from "../../lib/backgroundServiceApi";
 import { motion } from "framer-motion";
 import DashboardLayout from "../../components/ui/DashboardLayout";
@@ -2078,7 +2077,7 @@ export default function Dashboard() {
         // Corrected call to use the imported function:
         // await getSimilarThreads(); // This function requires threadId and targetLabel, which are not available here. Commenting out for now.
         // If getSimilarThreads requires a thread ID, this logic needs revision.
-      }
+      // }
 
       // Update the UI to reflect refreshed data
       setIsLoading(false);
