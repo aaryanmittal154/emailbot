@@ -34,6 +34,7 @@ class EmailClassifierService:
         - Announcing a scheduled gathering → EVENT
         - Primarily asking for information → QUESTIONS
         - Introducing a topic for discussion → DISCUSSION TOPICS
+        - Providing resource information such as access keys or shared group resources → RESOURCE
         - Security, promotional, or marketing email → IRRELEVANT
         - If none of above apply → OTHER
 
@@ -73,6 +74,12 @@ class EmailClassifierService:
         - Email continues an ongoing thread or conversation on a specific topic
         - Email shares information with an invitation for response
 
+        FOR RESOURCE (ANY of these):
+        - Email is sharing an access code for a group of people
+        - Email contains phrases similar to "free for everyone to use"
+        - Email clearly communicates ownership of the shared resource
+        - When in doubt between RESOURCE and QUESTIONS, choose QUESTIONS
+        
         FOR IRRELEVANT (ANY of these):
         - Email is a promotional or marketing email (newsletters, special offers, advertisements)
         - Email is a security notification (password reset, login alert, verification code)

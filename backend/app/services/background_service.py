@@ -22,6 +22,8 @@ from app.services.auth_service import (
 )
 from app.services.vector_store import VectorStore
 
+from app.utils.categories import IRRELEVANT, CANDIDATE, EVENT, RESOURCE, OTHER, JOB_POSTING, QUESTIONS, \
+    DISCUSSION_TOPICS
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
@@ -339,15 +341,15 @@ class BackgroundService:
     ) -> List[Dict[str, Any]]:
         """Gather cross-category context for auto-reply"""
         # Specialized categories
-        specialized_categories = ["Job Posting", "Candidate"]
-        general_categories = ["Questions", "Discussion Topics", "Events", "Other"]
+        specialized_categories = [JOB_POSTING, CANDIDATE]
+        general_categories = [QUESTIONS, DISCUSSION_TOPICS, EVENT, RESOURCE, OTHER]
 
         # For job postings, find matching candidates
-        if primary_category == "Job Posting":
+        if primary_category == JOB_POSTING:
             return self.email_service.get_matching_candidates(thread_id)
 
         # For candidates, find matching jobs
-        elif primary_category == "Candidate":
+        elif primary_category == CANDIDATE:
             return self.email_service.get_matching_jobs(thread_id)
 
         # For general categories, use cross-category context

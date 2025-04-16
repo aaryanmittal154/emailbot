@@ -11,25 +11,16 @@ from app.models.custom_prompt import CustomPrompt
 from app.services.auth_service import get_current_user
 from app.services.email_classifier_service import EmailClassifierService
 from app.services.auto_reply_service import AutoReplyManager
+from app.utils.categories import VALID_CATEGORIES
+
+from app.utils.categories import IRRELEVANT, CANDIDATE, EVENT, OTHER, JOB_POSTING, QUESTIONS, \
+    DISCUSSION_TOPICS
 
 # Initialize logger
 logger = logging.getLogger(__name__)
 
 # Initialize router
 router = APIRouter()
-
-# Define valid categories and prompt types for validation
-VALID_CATEGORIES = [
-    "Job Posting",
-    "Candidate",
-    "Event",
-    "Questions",
-    "Discussion Topics",
-    "Irrelevant",
-    "Other",
-    "Follow-ups",
-]
-
 VALID_PROMPT_TYPES = ["classification", "auto_reply"]
 
 # Default prompts
@@ -256,12 +247,12 @@ async def get_prompt(
             if prompt_type == "classification":
                 content = DEFAULT_CLASSIFICATION_PROMPT
             else:  # auto_reply
-                if category in ["Job Posting", "Candidate"]:
+                if category in [JOB_POSTING, CANDIDATE]:
                     prompt_key = category.lower().replace(" ", "_")
                     content = DEFAULT_AUTO_REPLY_PROMPTS.get(
                         prompt_key, DEFAULT_AUTO_REPLY_PROMPTS["general"]
                     )
-                elif category in ["Questions", "Discussion Topics", "Event"]:
+                elif category in [QUESTIONS, DISCUSSION_TOPICS, EVENT]:
                     content = DEFAULT_AUTO_REPLY_PROMPTS["context_only"]
                 else:
                     content = DEFAULT_AUTO_REPLY_PROMPTS["general"]

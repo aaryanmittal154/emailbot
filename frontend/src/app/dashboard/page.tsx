@@ -20,9 +20,6 @@ import {
   Th,
   Td,
   Badge,
-  Input,
-  InputGroup,
-  InputRightElement,
   IconButton,
   Tabs,
   TabList,
@@ -76,11 +73,11 @@ import PromptManagement from "../../components/PromptManagement";
 import {
   getBackgroundServiceStatus,
   toggleBackgroundService,
-  getBackgroundServiceOAuthUrl,
 } from "../../lib/backgroundServiceApi";
 import { motion } from "framer-motion";
 import DashboardLayout from "../../components/ui/DashboardLayout";
 import he from "he"; // Add this import
+import { getBackgroundServiceOAuthUrl } from "../../lib/backgroundServiceApi";
 
 const BASE_URL = "https://emailbot-k8s7.onrender.com";
 
@@ -242,6 +239,7 @@ export default function Dashboard() {
   const [events, setEvents] = useState<any[]>([]);
   const [questions, setQuestions] = useState<any[]>([]);
   const [discussions, setDiscussions] = useState<any[]>([]);
+  const [resources, setResources] = useState<any[]>([]);
   const [otherEmails, setOtherEmails] = useState<any[]>([]);
   const [irrelevantEmails, setIrrelevantEmails] = useState<any[]>([]);
   const [loadingLabeled, setLoadingLabeled] = useState<boolean>(false);
@@ -360,16 +358,23 @@ export default function Dashboard() {
         }
       } catch (error) {
         console.error("Error fetching user data:", error);
-        console.log(
-          "Axios error details:",
-          error.response
-            ? {
-                status: error.response.status,
-                statusText: error.response.statusText,
-                data: error.response.data,
-              }
-            : "No response details"
-        );
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "response" in error &&
+          typeof (error as any).response === "object"
+        ) {
+          console.log(
+            "Axios error details:",
+            error.response
+              ? {
+                  status: (error as any).response.status,
+                  statusText: (error as any).response.statusText,
+                  data: (error as any).response.data,
+                }
+              : "No response details"
+          );
+        }
 
         toast({
           title: "Authentication error",
@@ -641,8 +646,9 @@ export default function Dashboard() {
         "Candidate",
         "Question",
         "Follow-up",
+        "Resource"
       ];
-      const matchedCategory = threadLabels.find((label) =>
+      const matchedCategory = threadLabels.find((label: string) =>
         categoryLabels.includes(label)
       );
 
@@ -829,6 +835,7 @@ export default function Dashboard() {
         candidatesRes,
         eventsRes,
         questionsRes,
+        resourceRes,
         discussionsRes,
         otherRes,
         irrelevantRes,
@@ -837,6 +844,7 @@ export default function Dashboard() {
         getEmailsByLabel("Candidate", { refresh_db: true, t: cacheBuster }),
         getEmailsByLabel("Event", { refresh_db: true, t: cacheBuster }),
         getEmailsByLabel("Questions", { refresh_db: true, t: cacheBuster }),
+        getEmailsByLabel("Resource", { refresh_db: true, t: cacheBuster }),
         getEmailsByLabel("Discussion Topics", {
           refresh_db: true,
           t: cacheBuster,
@@ -852,6 +860,7 @@ export default function Dashboard() {
         Candidate: candidatesRes.data || [],
         Event: eventsRes.data || [],
         Questions: questionsRes.data || [],
+        Resource: resourceRes.data || [],
         "Discussion Topics": discussionsRes.data || [],
         Other: otherRes.data || [],
         Irrelevant: irrelevantRes.data || [],
@@ -886,6 +895,7 @@ export default function Dashboard() {
       setEvents(sortByDate(eventsRes.data || []));
       setQuestions(sortByDate(questionsRes.data || []));
       setDiscussions(sortByDate(discussionsRes.data || []));
+      setResources(sortByDate(resourceRes.data || []));
       setOtherEmails(sortByDate(otherRes.data || []));
       setIrrelevantEmails(sortByDate(irrelevantRes.data || []));
       console.log("Refreshed all labeled categories from database");
@@ -1068,7 +1078,7 @@ export default function Dashboard() {
         } else {
           setSharedCandidates([]);
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error("Error fetching matches:", error);
         toast({
           title: "Error fetching matches",
@@ -1962,12 +1972,7 @@ export default function Dashboard() {
     // Function to handle back button click
     const handleBackClick = () => {
       // Use browser's history back if available
-      if (window.history.state && window.history.state.view === "email") {
-        window.history.back();
-      } else {
-        // Fallback to explicit closeThread
-        closeThread();
-      }
+      closeThread();
     };
 
     return (
@@ -2066,13 +2071,13 @@ export default function Dashboard() {
       await fetchLabeledEmails();
 
       // For thoroughness, refresh any other data views in other tabs
-      if (tabIndex === 4) {
+      // if (tabIndex === 4) {
         // If Follow-ups tab is active or might be viewed
         // await fetchSimilarEmails(); // Original call - likely typo
         // Corrected call to use the imported function:
         // await getSimilarThreads(); // This function requires threadId and targetLabel, which are not available here. Commenting out for now.
         // If getSimilarThreads requires a thread ID, this logic needs revision.
-      }
+      // }
 
       // Update the UI to reflect refreshed data
       setIsLoading(false);
@@ -2211,6 +2216,7 @@ export default function Dashboard() {
             position: "top",
             duration: 7000,
             isClosable: true,
+
             render: ({ onClose }) => (
               <Box
                 color="white"
@@ -2551,6 +2557,19 @@ export default function Dashboard() {
 
             {tabIndex === 6 &&
               (selectedLabeledEmail &&
+              selectedLabeledEmail.category === "Resource" ? (
+                renderLabeledEmailView()
+              ) : (
+                <Box p={4} bg="white" borderRadius="md" shadow="sm">
+                  <Flex justify="space-between" align="center" mb={4}>
+                    <Heading size="md">Resources</Heading>
+                  </Flex>
+                  {renderLabeledEmailList(resources, "Resource")}
+                </Box>
+              ))}
+
+            {tabIndex === 7 &&
+              (selectedLabeledEmail &&
               selectedLabeledEmail.category === "Other" ? (
                 renderLabeledEmailView()
               ) : (
@@ -2562,7 +2581,7 @@ export default function Dashboard() {
                 </Box>
               ))}
 
-            {tabIndex === 7 &&
+            {tabIndex === 8 &&
               (selectedLabeledEmail &&
               selectedLabeledEmail.category === "Irrelevant" ? (
                 renderLabeledEmailView()
@@ -2577,7 +2596,7 @@ export default function Dashboard() {
                 </Box>
               ))}
 
-            {tabIndex === 8 && <PromptManagement />}
+            {tabIndex === 9 && <PromptManagement />}
 
             {/* Remove the redundant thread rendering since each tab now handles its own threads */}
           </Box>

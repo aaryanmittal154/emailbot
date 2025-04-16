@@ -61,6 +61,7 @@ const CATEGORIES = [
   "Questions",
   "Discussion Topics",
   "Irrelevant",
+  "Resources",
   "Other",
   "Follow-ups",
 ];

@@ -77,7 +77,7 @@ const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
       isOpen: communicationsOpen,
       setIsOpen: setCommunicationsOpen,
       items: [
-        { name: "Prompts", icon: FiCommand, tabIndex: 8 },
+        { name: "Prompts", icon: FiCommand, tabIndex: 9 },
         { name: "Inbox", icon: FiMail, tabIndex: 0 },
         { name: "Questions", icon: FiHelpCircle, tabIndex: 3 },
         { name: "Discussion Topics", icon: FiClock, tabIndex: 4 },
@@ -90,8 +90,9 @@ const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
       setIsOpen: setManagementOpen,
       items: [
         { name: "Events", icon: FiCalendar, tabIndex: 5 },
-        { name: "Other", icon: FiFolder, tabIndex: 6 },
-        { name: "Irrelevant", icon: FiFilter, tabIndex: 7 },
+        { name: "Resources", icon: FiFolder, tabIndex: 6 },
+        { name: "Other", icon: FiFolder, tabIndex: 7 },
+        { name: "Irrelevant", icon: FiFilter, tabIndex: 8 },
       ],
     },
   ];

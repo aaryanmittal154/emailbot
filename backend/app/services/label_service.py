@@ -25,6 +25,8 @@ from app.schemas.label import (
     LabelSuggestionResponse,
 )
 
+from app.utils.categories import IRRELEVANT, CANDIDATE, RESOURCE, EVENT, OTHER, JOB_POSTING, QUESTIONS, \
+    DISCUSSION_TOPICS
 # Initialize logger
 logger = logging.getLogger(__name__)
 
@@ -53,19 +55,19 @@ class EmailLabelService:
             # Create email type labels
             email_type_labels = [
                 EmailLabel(
-                    name="Job Posting",
+                    name=JOB_POSTING,
                     category_id=email_category.id,
                     description="Emails containing job opportunities and listings",
                     color="#4285F4",  # Blue
                 ),
                 EmailLabel(
-                    name="Candidate",
+                    name=CANDIDATE,
                     category_id=email_category.id,
                     description="Emails from or about candidates and applications",
                     color="#EA4335",  # Red
                 ),
                 EmailLabel(
-                    name="Event",
+                    name=EVENT,
                     category_id=email_category.id,
                     description="Emails about events, meetings, and webinars",
                     color="#34A853",  # Green
@@ -170,25 +172,31 @@ class EmailLabelService:
             # Create communication-related labels
             communication_labels = [
                 EmailLabel(
-                    name="Questions",
+                    name=QUESTIONS,
                     category_id=communication_category.id,
                     description="Emails primarily asking for information or clarification",
                     color="#A142F4",  # Purple
                 ),
                 EmailLabel(
-                    name="Discussion Topics",
+                    name=DISCUSSION_TOPICS,
                     category_id=communication_category.id,
                     description="Emails introducing or continuing topical discussions",
                     color="#F6BF26",  # Amber/Gold
                 ),
                 EmailLabel(
-                    name="Irrelevant",
+                    name=IRRELEVANT,
                     category_id=communication_category.id,
                     description="Promotional and security emails that don't need storing or replies",
                     color="#DD5959",  # Red-ish
                 ),
                 EmailLabel(
-                    name="Other",
+                    name=RESOURCE,
+                    category_id=communication_category.id,
+                    description="Emails containing resources or attachments",
+                    color="#4285F4",  # Blue
+                ),
+                EmailLabel(
+                    name=OTHER,
                     category_id=communication_category.id,
                     description="Emails that don't fit other categories",
                     color="#9AA0A6",  # Gray
