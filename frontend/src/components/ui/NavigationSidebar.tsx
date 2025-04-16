@@ -77,7 +77,7 @@ const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
       isOpen: communicationsOpen,
       setIsOpen: setCommunicationsOpen,
       items: [
-        { name: "Prompts", icon: FiCommand, tabIndex: 8 },
+        { name: "Prompts", icon: FiCommand, tabIndex: 9 },
         { name: "Inbox", icon: FiMail, tabIndex: 0 },
         { name: "Questions", icon: FiHelpCircle, tabIndex: 3 },
         { name: "Discussion Topics", icon: FiClock, tabIndex: 4 },

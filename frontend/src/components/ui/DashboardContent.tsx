@@ -145,6 +145,7 @@ export const DashboardContent = ({
   const [events, setEvents] = useState<any[]>([]);
   const [questions, setQuestions] = useState<any[]>([]);
   const [discussionTopics, setDiscussionTopics] = useState<any[]>([]);
+  const [resources, setResources] = useState<any[]>([]);
   const [other, setOther] = useState<any[]>([]);
   const [irrelevantEmails, setIrrelevantEmails] = useState<any[]>([]);
 
@@ -280,6 +281,7 @@ export const DashboardContent = ({
         questionResults,
         discussionResults,
         eventsResults,
+        resourcesResults,
         otherResults,
         irrelevantResults,
       ] = await Promise.all([
@@ -288,6 +290,7 @@ export const DashboardContent = ({
         getEmailsByLabel("Questions"),
         getEmailsByLabel("Discussion Topics"),
         getEmailsByLabel("Event"),
+        getEmailsByLabel("Resources"),
         getEmailsByLabel("Other"),
         getEmailsByLabel("Irrelevant"),
       ]);
@@ -297,6 +300,7 @@ export const DashboardContent = ({
       setQuestions(questionResults.data || []);
       setDiscussionTopics(discussionResults.data || []);
       setEvents(eventsResults.data || []);
+      setResources(resourcesResults.data || []);
       setOther(otherResults.data || []);
       setIrrelevantEmails(irrelevantResults.data || []);
 
